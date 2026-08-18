@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useCallback, useEffect, useReducer, useDeferredValue } from "react";
+import React, { useState, useMemo, useRef, useCallback, useEffect, useLayoutEffect, useReducer, useDeferredValue } from "react";
 
 /* ============================================================
    Visual Loom v1.6
@@ -551,32 +551,36 @@ const CSS = `
   gap:8px; padding:0 12px; border-bottom:1px solid var(--bd2); overflow:visible; min-width:0; }
 .pd .helpbtn { margin-left:2px; }
 
-/* under 1700: secondary buttons drop to icons, swatches lose their names */
-@media (max-width:1700px) {
-  .pd .top .btn:not(.hero) span { display:none; }
-  .pd .top .btn:not(.hero) { padding:0 7px; gap:0; }
-  .pd .top .sw span { display:none; }
-  .pd .top .sw { padding:0 6px; }
-  .pd .top .glabel { display:none; }
-  .pd .top .rangefield .cap { display:none; }
-  .pd .top .rangefield { padding:0 6px; }
-  .pd .top { gap:6px; }
-}
-/* under 1180: explicit pixel dimensions go, aspect presets remain */
-@media (max-width:1180px) {
-  .pd .top .dims { display:none; }
-}
-/* under 940: last resort, the row scrolls rather than clipping */
-@media (max-width:940px) {
-  .pd .top { overflow-x:auto; scrollbar-width:none; }
-  .pd .top::-webkit-scrollbar { display:none; }
-}
+/* Tiers are applied by measurement, not by guessing viewport widths. Each
+   step removes something and the bar re-tests whether it fits. */
+.pd .top[data-tier="1"] .btn:not(.hero) span,
+.pd .top[data-tier="2"] .btn:not(.hero) span,
+.pd .top[data-tier="3"] .btn:not(.hero) span { display:none; }
+.pd .top[data-tier="1"] .btn:not(.hero),
+.pd .top[data-tier="2"] .btn:not(.hero),
+.pd .top[data-tier="3"] .btn:not(.hero) { padding:0 7px; gap:0; }
+.pd .top[data-tier="1"] .glabel,
+.pd .top[data-tier="2"] .glabel,
+.pd .top[data-tier="3"] .glabel { display:none; }
+.pd .top[data-tier="1"] .rangefield .cap,
+.pd .top[data-tier="2"] .rangefield .cap,
+.pd .top[data-tier="3"] .rangefield .cap { display:none; }
+.pd .top[data-tier="2"] .dims,
+.pd .top[data-tier="3"] .dims { display:none; }
+.pd .top[data-tier="3"] { overflow-x:auto; scrollbar-width:none; }
+.pd .top[data-tier="3"]::-webkit-scrollbar { display:none; }
+
+.pd .sw.solo { height:28px; padding:0 8px; display:inline-flex; align-items:center; gap:7px;
+  border:1px solid var(--bd); color:var(--t1); }
+.pd .sw.solo:hover { border-color:#5c5c5c; color:var(--t0); }
+.pd .sw.solo .glabel { font-size:9.5px; font-weight:500; letter-spacing:.1em; text-transform:uppercase; }
+.pd .popmenu .swrow { display:flex; align-items:center; gap:8px; }
+.pd .popmenu .swrow i { width:12px; height:12px; border:1px solid #555; display:block; }
+
 
 .pd .sizechips { display:flex; gap:3px; }
 .pd .dims { display:flex; align-items:center; gap:5px; }
 .pd .dims .x { color:var(--t2); font-size:10px; }
-.pd .grounds { display:flex; align-items:center; gap:4px; }
-.pd .grounds .glabel { color:var(--t1); white-space:nowrap; }
 
 .pd .top::-webkit-scrollbar { display:none; }
 .pd .brand { font-size:11px; font-weight:600; letter-spacing:.24em; text-transform:uppercase; white-space:nowrap; }
@@ -1227,6 +1231,7 @@ export default function VisualLoom() {
   const [svgMode, setSvgMode] = useState(true);
   const fileRef = useRef(null);
   const stageRef = useRef(null);
+  const topRef = useRef(null);
 
   const [fit, setFit] = useState({ w: 200, h: 200 });
 
@@ -1292,6 +1297,27 @@ export default function VisualLoom() {
     link.href = "https://fonts.googleapis.com/css2?family=Archivo:wght@300;400;500;600&display=swap";
     document.head.append(pre, link);
   }, []);
+
+  /* ---- toolbar fit ----
+     Rather than guessing which viewport widths need which layout, the bar tries
+     a tier, measures whether it actually overflows, and steps until it fits.
+     Stepping back up is verified the same way, so it can never stick in a
+     collapsed state after the window grows. */
+  useLayoutEffect(() => {
+    const el = topRef.current; if (!el) return;
+    const fits = () => el.scrollWidth <= el.clientWidth + 1;
+    const apply = (t) => { el.dataset.tier = String(t); };
+    const settleFit = () => {
+      let t = Number(el.dataset.tier) || 0;
+      while (t > 0) { apply(t - 1); if (fits()) t -= 1; else { apply(t); break; } }
+      while (t < 3 && !fits()) { t += 1; apply(t); }
+    };
+    settleFit();
+    const ro = new ResizeObserver(settleFit);
+    ro.observe(el);
+    window.addEventListener("resize", settleFit);
+    return () => { ro.disconnect(); window.removeEventListener("resize", settleFit); };
+  });
 
   useEffect(() => {
     const el = stageRef.current; if (!el) return;
@@ -1770,6 +1796,10 @@ export default function VisualLoom() {
   const drawerText = drawer === "svg" ? buildSVG(doc, svgMode) : drawer === "preset" ? presetJSON() : "";
   const activeTiles = tiles.filter((t) => t.on).length;
 
+  const swatchStyle = (g) => (g === "none"
+    ? { backgroundImage: "linear-gradient(45deg,#555 25%,transparent 25%,transparent 75%,#555 75%),linear-gradient(45deg,#555 25%,#1a1a1a 25%,#1a1a1a 75%,#555 75%)", backgroundSize: "8px 8px", backgroundPosition: "0 0,4px 4px" }
+    : { background: g });
+
   const canvasControls = (
     <>
       <div className="sizechips">
@@ -1785,17 +1815,22 @@ export default function VisualLoom() {
           onChange={(e) => setH(Math.max(200, +e.target.value || 200))} />
       </div>
       <span className="vr" />
-      <div className="grounds">
-        <span className="cap glabel">Background</span>
+      <MenuButton menu={(m) => (<>
+        <span className="menuhead">Background</span>
         {GROUNDS.map(([g, gl]) => (
-          <button key={g} className={`sw${bg === g ? " on" : ""}`} onClick={() => setBg(g)} title={`Background: ${gl}`}>
-            <i style={g === "none"
-              ? { backgroundImage: "linear-gradient(45deg,#555 25%,transparent 25%,transparent 75%,#555 75%),linear-gradient(45deg,#555 25%,#1a1a1a 25%,#1a1a1a 75%,#555 75%)", backgroundSize: "8px 8px", backgroundPosition: "0 0,4px 4px" }
-              : { background: g }} />
-            <span>{gl}</span>
+          <button key={g} className={bg === g ? "on" : ""}
+            onClick={() => { m.setOpen(false); setBg(g); }}>
+            <span className="swrow"><i style={swatchStyle(g)} />{gl}</span>
           </button>
         ))}
-      </div>
+      </>)}>
+        {() => (
+          <button className="sw solo" title={`Background: ${GROUNDS.find(([g]) => g === bg)?.[1]}`}>
+            <i style={swatchStyle(bg)} />
+            <span className="glabel">Background</span>
+          </button>
+        )}
+      </MenuButton>
     </>
   );
 
@@ -1804,7 +1839,7 @@ export default function VisualLoom() {
       <style>{CSS}</style>
 
       {/* ---- document bar ---- */}
-      <div className="top">
+      <div className="top" ref={topRef} data-tier="0">
         {canvasControls}
         <span style={{ flex: 1 }} />
         <Act onClick={undo} icon={Ico.undo} label="Undo" dis={!canUndo} />
@@ -1832,6 +1867,9 @@ export default function VisualLoom() {
         </div>
         <Act onClick={() => setLayers((ls) => ls.map((l) => ({ ...l, seed: Math.floor(Math.random() * 1e5) })))} icon={Ico.dice} label="Reseed all" />
         <span className="vr" />
+        <Act onClick={openPreset} icon={Ico.save} label="Save preset" />
+        <Act onClick={() => fileRef.current?.click()} icon={Ico.open} label="Load preset" />
+        <span className="vr" />
         <MenuButton menu={(m) => (<>
           <span className="menuhead">Repeats</span>
           <button className={expand ? "on" : ""}
@@ -1855,9 +1893,8 @@ export default function VisualLoom() {
         </>)}>
           {(m) => <Act onClick={() => { m.setOpen(false); openPNG(1); }} icon={Ico.image} label="PNG" />}
         </MenuButton>
-        <Act onClick={openPreset} icon={Ico.save} label="Save preset" />
-        <Act onClick={() => fileRef.current?.click()} icon={Ico.open} label="Load preset" />
-        <Act onClick={resetDoc} icon={Ico.reset} label="Reset" />
+        <span className="vr" />
+        <Act onClick={resetDoc} icon={Ico.reset} label="Reset all" />
 
         <input ref={fileRef} type="file" accept=".json" onChange={loadJSON} style={{ display: "none" }} />
         <button className="iconbtn helpbtn" onClick={() => setHelp(true)} title="What is this?">{Ico.help}</button>
