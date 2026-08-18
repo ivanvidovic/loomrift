@@ -532,15 +532,45 @@ const CSS = `
 .pd .scroll { overflow-y:auto; scrollbar-width:none; -ms-overflow-style:none; }
 .pd .scroll::-webkit-scrollbar { width:0; height:0; display:none; }
 
-.pd .top { flex:none; height:44px; display:flex; align-items:center; gap:8px; padding:0 12px;
-  border-bottom:1px solid var(--bd2); overflow:visible; min-width:0; }
-/* stage one: button labels drop, icons carry the meaning (titles still on hover) */
-.pd .top.compact .btn span { display:none; }
-.pd .top.compact .btn { padding:0 7px; gap:0; }
-.pd .top.compact { gap:6px; }
-/* stage two: the wordmark goes, the mark stays */
-.pd .top.mini .brand, .pd .top.mini .ver { display:none; }
-.pd .top.mini .vr { display:none; }
+/* The identity sits on its own line so the toolbar gets the full width and
+   starts at the left edge. */
+/* Identity sits at the foot of the rail, rotated so its top edge faces the
+   left screen edge. Absolutely positioned so the rotation doesn't reserve
+   horizontal space the rail can't give. */
+.pd .railfoot { flex:1; min-height:0; width:100%; position:relative; }
+.pd .railmark { position:absolute; left:50%; bottom:18px; margin-left:-8px;
+  transform-origin:0 0; transform:rotate(-90deg);
+  display:flex; align-items:center; gap:9px; white-space:nowrap; }
+.pd .railmark .brand { font-size:10px; letter-spacing:.22em; }
+.pd .railmark .ver { font-size:9px; }
+
+/* ONE row, fixed height. It collapses at CSS breakpoints rather than by
+   measurement, so it can never be clipped, wrap, or get stuck at the wrong
+   size when the window is resized. */
+.pd .top { flex:none; height:44px; display:flex; flex-wrap:nowrap; align-items:center;
+  gap:8px; padding:0 12px; border-bottom:1px solid var(--bd2); overflow:visible; min-width:0; }
+.pd .helpbtn { margin-left:2px; }
+
+/* under 1700: secondary buttons drop to icons, swatches lose their names */
+@media (max-width:1700px) {
+  .pd .top .btn:not(.hero) span { display:none; }
+  .pd .top .btn:not(.hero) { padding:0 7px; gap:0; }
+  .pd .top .sw span { display:none; }
+  .pd .top .sw { padding:0 6px; }
+  .pd .top .glabel { display:none; }
+  .pd .top .rangefield .cap { display:none; }
+  .pd .top .rangefield { padding:0 6px; }
+  .pd .top { gap:6px; }
+}
+/* under 1180: explicit pixel dimensions go, aspect presets remain */
+@media (max-width:1180px) {
+  .pd .top .dims { display:none; }
+}
+/* under 940: last resort, the row scrolls rather than clipping */
+@media (max-width:940px) {
+  .pd .top { overflow-x:auto; scrollbar-width:none; }
+  .pd .top::-webkit-scrollbar { display:none; }
+}
 
 .pd .sizechips { display:flex; gap:3px; }
 .pd .dims { display:flex; align-items:center; gap:5px; }
@@ -548,17 +578,7 @@ const CSS = `
 .pd .grounds { display:flex; align-items:center; gap:4px; }
 .pd .grounds .glabel { color:var(--t1); white-space:nowrap; }
 
-/* canvas controls folded into a popover on narrow screens */
-.pd .docwrap { position:relative; display:inline-flex; }
-.pd .docmenu { position:absolute; top:calc(100% + 4px); left:0; z-index:70;
-  display:flex; flex-wrap:wrap; align-items:center; gap:8px; width:max-content; max-width:min(92vw, 460px);
-  padding:10px; background:var(--s2); border:1px solid var(--bd);
-  box-shadow:0 8px 24px rgba(0,0,0,.6); }
-.pd .docmenu::before { content:""; position:absolute; left:0; right:0; bottom:100%; height:8px; }
-.pd .docmenu .vr { display:none; }
-.pd .docmenu .sizechips, .pd .docmenu .grounds { flex-wrap:wrap; }
 .pd .top::-webkit-scrollbar { display:none; }
-.pd .brandwrap { display:flex; align-items:center; gap:7px; }
 .pd .brand { font-size:11px; font-weight:600; letter-spacing:.24em; text-transform:uppercase; white-space:nowrap; }
 .pd .ver { font-size:9px; color:var(--t2); font-family:ui-monospace,monospace; }
 .pd .vr { width:1px; height:20px; background:var(--bd2); flex:none; }
@@ -591,8 +611,6 @@ const CSS = `
 .pd .rangefield { display:flex; align-items:center; gap:5px; height:28px; padding:0 8px;
   border:1px solid var(--bd2); }
 .pd .rangefield .cap { color:var(--t2); }
-.pd .top.compact .rangefield .cap { display:none; }
-.pd .top.compact .rangefield { padding:0 6px; }
 .pd .rangefield .dash { color:var(--t2); font-size:10px; }
 .pd .mini { width:30px; height:20px; padding:0 3px; background:var(--s1); border:1px solid var(--bd);
   color:var(--t0); font-size:10px; font-family:ui-monospace,monospace; text-align:center; outline:none; }
@@ -602,21 +620,20 @@ const CSS = `
 /* The wrapper's hover area has to span the button AND the menu, otherwise
    crossing the gap between them fires mouseleave and the menu closes before
    it can be clicked. A pseudo-element bridges the gap. */
-.pd .pngwrap { position:relative; display:inline-flex; }
-.pd .pngmenu::before { content:""; position:absolute; left:0; right:0; bottom:100%; height:8px; }
-.pd .pngmenu { position:absolute; top:calc(100% + 4px); right:0; z-index:70; min-width:132px;
-  display:flex; flex-direction:column; background:var(--s2); border:1px solid var(--bd);
-  box-shadow:0 8px 24px rgba(0,0,0,.6); }
-.pd .pngmenu button { display:flex; align-items:center; justify-content:space-between; gap:12px;
-  padding:6px 9px; text-align:left; }
-.pd .pngmenu button:hover { background:#2a2a2a; }
-.pd .pngmenu span { font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--t0); }
-.pd .pngmenu em { font-style:normal; font-size:9px; font-family:ui-monospace,monospace; color:var(--t2); }
-.pd .pngmenu.wide { min-width:184px; }
-.pd .pngmenu .menuhead { padding:6px 9px 4px; font-size:8.5px; letter-spacing:.18em;
+.pd .menuwrap { position:relative; display:inline-flex; }
+/* invisible bridge across the gap so travelling to the menu can't dismiss it */
+.pd .popmenu::before { content:""; position:absolute; left:0; right:0; bottom:100%; height:10px; }
+.pd .popmenu { position:fixed; z-index:200; min-width:172px; display:flex; flex-direction:column;
+  background:var(--s2); border:1px solid var(--bd); box-shadow:0 8px 24px rgba(0,0,0,.6); }
+.pd .popmenu button { display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:6px 10px; text-align:left; }
+.pd .popmenu button:hover { background:#2a2a2a; }
+.pd .popmenu button > span { font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--t0); }
+.pd .popmenu em { font-style:normal; font-size:9px; font-family:ui-monospace,monospace; color:var(--t2); }
+.pd .popmenu .menuhead { padding:6px 10px 4px; font-size:8.5px; letter-spacing:.18em;
   text-transform:uppercase; color:var(--t2); border-bottom:1px solid var(--bd2); }
-.pd .pngmenu button.on { background:rgba(123,63,212,.15); }
-.pd .pngmenu button.on span { color:#c9a4ff; }
+.pd .popmenu button.on { background:rgba(123,63,212,.15); }
+.pd .popmenu button.on > span { color:#c9a4ff; }
 .pd .num-in { width:64px; height:28px; padding:0 7px; background:var(--s1); border:1px solid var(--bd);
   color:var(--t0); font-size:11px; font-family:ui-monospace,monospace; outline:none; }
 .pd .num-in:focus { border-color:#8a8a8a; }
@@ -1008,6 +1025,27 @@ function useHoverMenu(delay = 160) {
   };
 }
 
+/* Menus are positioned in viewport space rather than inside the toolbar, so a
+   scrolling or tightly-packed bar can never clip them. */
+function MenuButton({ menu, children }) {
+  const ref = useRef(null);
+  const m = useHoverMenu();
+  const [pos, setPos] = useState(null);
+  useEffect(() => {
+    if (!m.open || !ref.current) { setPos(null); return; }
+    const r = ref.current.getBoundingClientRect();
+    setPos({ top: r.bottom + 4, right: Math.max(8, window.innerWidth - r.right) });
+  }, [m.open]);
+  return (
+    <span className="menuwrap" ref={ref} {...m.bind}>
+      {children(m)}
+      {m.open && pos && (
+        <span className="popmenu" style={{ top: pos.top, right: pos.right }}>{menu(m)}</span>
+      )}
+    </span>
+  );
+}
+
 /* ---------------- artboard (canvas) ----------------
    The preview is rasterised, not a DOM tree. A tile with 400 rects placed in
    40 cells is 16,000 SVG nodes but only 400 fills: each unique tile is drawn
@@ -1186,20 +1224,10 @@ export default function VisualLoom() {
   const [drawer, setDrawer] = useState(null);
   const [png, setPng] = useState(null);
   const [pngSize, setPngSize] = useState([0, 0]);
-  const pngM = useHoverMenu();
-  const svgM = useHoverMenu();
   const [svgMode, setSvgMode] = useState(true);
   const fileRef = useRef(null);
   const stageRef = useRef(null);
-  const barRef = useRef(null);
-  const [barW, setBarW] = useState(1600);
-  const [docMenu, setDocMenu] = useState(false);
-  useEffect(() => {
-    if (!docMenu) return;
-    const away = (e) => { if (!e.target.closest(".docwrap")) setDocMenu(false); };
-    window.addEventListener("pointerdown", away);
-    return () => window.removeEventListener("pointerdown", away);
-  }, [docMenu]);
+
   const [fit, setFit] = useState({ w: 200, h: 200 });
 
   /* live drag state — declared before the document memos that read it */
@@ -1263,16 +1291,6 @@ export default function VisualLoom() {
     link.id = "pd-archivo"; link.rel = "stylesheet";
     link.href = "https://fonts.googleapis.com/css2?family=Archivo:wght@300;400;500;600&display=swap";
     document.head.append(pre, link);
-  }, []);
-
-  /* The bar collapses in stages as it narrows: button labels drop first, then
-     the canvas controls fold into a popover. Nothing is ever clipped. */
-  useEffect(() => {
-    const el = barRef.current; if (!el) return;
-    const ro = new ResizeObserver(() => setBarW(el.clientWidth));
-    ro.observe(el);
-    setBarW(el.clientWidth);
-    return () => ro.disconnect();
   }, []);
 
   useEffect(() => {
@@ -1786,21 +1804,8 @@ export default function VisualLoom() {
       <style>{CSS}</style>
 
       {/* ---- document bar ---- */}
-      <div ref={barRef}
-        className={`top${barW < 1660 ? " compact" : ""}${barW < 620 ? " mini" : ""}`}>
-        <span className="brandwrap"><Mark h={15} /><span className="brand">Visual Loom</span></span>
-        <span className="ver">1.6</span>
-        <span className="vr" />
-        {barW >= 1200 ? canvasControls : (
-          <span className="docwrap">
-            <Act onClick={() => setDocMenu(!docMenu)} icon={Ico.grid} label="Canvas" on={docMenu} />
-            {docMenu && (
-              <span className="docmenu">
-                {canvasControls}
-              </span>
-            )}
-          </span>
-        )}
+      <div className="top">
+        {canvasControls}
         <span style={{ flex: 1 }} />
         <Act onClick={undo} icon={Ico.undo} label="Undo" dis={!canUndo} />
         <Act onClick={redo} icon={Ico.redo} label="Redo" dis={!canRedo} />
@@ -1827,42 +1832,35 @@ export default function VisualLoom() {
         </div>
         <Act onClick={() => setLayers((ls) => ls.map((l) => ({ ...l, seed: Math.floor(Math.random() * 1e5) })))} icon={Ico.dice} label="Reseed all" />
         <span className="vr" />
-        <span className="pngwrap" {...svgM.bind}>
-          <Act onClick={() => { svgM.setOpen(false); openSVG(expand); }} icon={Ico.code} label="SVG" />
-          {svgM.open && (
-            <span className="pngmenu wide">
-              <span className="menuhead">Repeats</span>
-              <button onClick={() => { svgM.setOpen(false); setExpand(true); openSVG(true); }}
-                className={expand ? "on" : ""}>
-                <span>Separate</span>
-                <em>easier to edit</em>
-              </button>
-              <button onClick={() => { svgM.setOpen(false); setExpand(false); openSVG(false); }}
-                className={!expand ? "on" : ""}>
-                <span>Linked</span>
-                <em>smaller file</em>
-              </button>
-            </span>
-          )}
-        </span>
-        <span className="pngwrap" {...pngM.bind}>
-          <Act onClick={() => { pngM.setOpen(false); openPNG(1); }} icon={Ico.image} label="PNG" />
-          {pngM.open && (
-            <span className="pngmenu">
-              {[[1, "Full"], [0.5, "Half"], [0.25, "Quarter"], [0.125, "Eighth"]].map(([f, n]) => (
-                <button key={n} onClick={() => { pngM.setOpen(false); openPNG(f); }}>
-                  <span>{n}</span>
-                  <em>{Math.round(W * f)}×{Math.round(H * f)}</em>
-                </button>
-              ))}
-            </span>
-          )}
-        </span>
-        <Act onClick={openPreset} icon={Ico.save} label="Save" />
-        <Act onClick={() => fileRef.current?.click()} icon={Ico.open} label="Load" />
+        <MenuButton menu={(m) => (<>
+          <span className="menuhead">Repeats</span>
+          <button className={expand ? "on" : ""}
+            onClick={() => { m.setOpen(false); setExpand(true); openSVG(true); }}>
+            <span>Separate</span><em>easier to edit</em>
+          </button>
+          <button className={!expand ? "on" : ""}
+            onClick={() => { m.setOpen(false); setExpand(false); openSVG(false); }}>
+            <span>Linked</span><em>smaller file</em>
+          </button>
+        </>)}>
+          {(m) => <Act onClick={() => { m.setOpen(false); openSVG(expand); }} icon={Ico.code} label="SVG" />}
+        </MenuButton>
+        <MenuButton menu={(m) => (<>
+          <span className="menuhead">Size</span>
+          {[[1, "Full"], [0.5, "Half"], [0.25, "Quarter"], [0.125, "Eighth"]].map(([f, n]) => (
+            <button key={n} onClick={() => { m.setOpen(false); openPNG(f); }}>
+              <span>{n}</span><em>{Math.round(W * f)}×{Math.round(H * f)}</em>
+            </button>
+          ))}
+        </>)}>
+          {(m) => <Act onClick={() => { m.setOpen(false); openPNG(1); }} icon={Ico.image} label="PNG" />}
+        </MenuButton>
+        <Act onClick={openPreset} icon={Ico.save} label="Save preset" />
+        <Act onClick={() => fileRef.current?.click()} icon={Ico.open} label="Load preset" />
         <Act onClick={resetDoc} icon={Ico.reset} label="Reset" />
-        <button className="iconbtn" style={{ marginLeft: 2 }} onClick={() => setHelp(true)} title="What is this?">{Ico.help}</button>
+
         <input ref={fileRef} type="file" accept=".json" onChange={loadJSON} style={{ display: "none" }} />
+        <button className="iconbtn helpbtn" onClick={() => setHelp(true)} title="What is this?">{Ico.help}</button>
       </div>
 
       <div className="main">
@@ -1872,6 +1870,13 @@ export default function VisualLoom() {
               {icon}<span>{t}</span>
             </button>
           ))}
+          <div className="railfoot">
+            <div className="railmark">
+              <Mark h={13} />
+              <span className="brand">Visual Loom</span>
+              <span className="ver">1.6</span>
+            </div>
+          </div>
         </div>
 
         <div className="panel">
