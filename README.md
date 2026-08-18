@@ -1,4 +1,4 @@
-# PD_LoomRift
+# Visual Loom
 
 Procedural gradient-tile collage generator. Exports SVG (editable in Illustrator) and PNG.
 

@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useRef, useCallback, useEffect, useReducer, useDeferredValue } from "react";
 
 /* ============================================================
-   PD_LoomRift v1.5
+   Visual Loom v1.6
    Procedural gradient-tile collage generator -> SVG / PNG
    ============================================================ */
 
@@ -43,48 +43,65 @@ const toOffsets = (w, total) => {
 const RAMPS = ["linear", "gamma", "triangle", "steps", "sine"];
 const DIRS = { r: [0, 0, 1, 0], l: [1, 0, 0, 0], d: [0, 0, 0, 1], u: [0, 1, 0, 0] };
 
-function rampStops(ramp, p, invert) {
+/* Stops as data, so the same definition feeds both the canvas preview and
+   the SVG export. */
+function rampStopList(ramp, p, invert) {
   const f = (v) => (invert ? 1 - v : v);
-  const hex = (v) => {
-    const c = Math.max(0, Math.min(255, Math.round(v * 255)));
-    const h = c.toString(16).padStart(2, "0");
-    return `#${h}${h}${h}`;
-  };
   let pts = [];
   if (ramp === "linear") pts = [[0, 0], [1, 1]];
   else if (ramp === "gamma") { const g = Math.max(0.15, p); for (let i = 0; i <= 10; i++) pts.push([i / 10, Math.pow(i / 10, g)]); }
   else if (ramp === "triangle") pts = [[0, 0], [0.5, 1], [1, 0]];
   else if (ramp === "sine") { for (let i = 0; i <= 12; i++) pts.push([i / 12, (1 - Math.cos(Math.PI * (i / 12))) / 2]); }
   else { const n = Math.max(2, Math.round(p)); for (let i = 0; i < n; i++) { const v = i / (n - 1); pts.push([i / n, v], [(i + 1) / n, v]); } }
-  return pts.map(([o, v]) => `<stop offset="${+o.toFixed(4)}" stop-color="${hex(f(v))}"/>`).join("");
+  return pts.map(([o, v]) => [o, Math.max(0, Math.min(255, Math.round(f(v) * 255)))]);
 }
+const greyHex = (c) => { const h = c.toString(16).padStart(2, "0"); return `#${h}${h}${h}`; };
+const rampStops = (ramp, p, invert) =>
+  rampStopList(ramp, p, invert).map(([o, c]) => `<stop offset="${+o.toFixed(4)}" stop-color="${greyHex(c)}"/>`).join("");
 
-class GradReg {
-  constructor() { this.map = new Map(); }
-  id(ramp, p, dir, invert) {
-    const key = `${ramp}|${+p.toFixed(2)}|${dir}|${invert ? 1 : 0}`;
-    if (!this.map.has(key)) this.map.set(key, { id: `pdg${this.map.size}`, ramp, p, dir, invert });
-    return this.map.get(key).id;
-  }
-  defs() {
-    return [...this.map.values()].map((g) => {
-      const [x1, y1, x2, y2] = DIRS[g.dir];
-      return `<linearGradient id="${g.id}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}">${rampStops(g.ramp, g.p, g.invert)}</linearGradient>`;
-    }).join("");
-  }
+const gradId = (ramp, p, dir, invert) =>
+  `g_${ramp}_${String(+p.toFixed(2)).replace(".", "-")}_${dir}${invert ? "_i" : ""}`;
+
+/* every distinct gradient used anywhere, keyed by id */
+const GRADS = new Map();
+function gradRef(ramp, p, dir, invert) {
+  const id = gradId(ramp, p, dir, invert);
+  if (!GRADS.has(id)) GRADS.set(id, { id, ramp, p, dir, invert, stops: rampStopList(ramp, p, invert) });
+  return id;
 }
+const gradDefs = (ids) => [...ids].map((id) => {
+  const g = GRADS.get(id);
+  const [x1, y1, x2, y2] = DIRS[g.dir];
+  return `<linearGradient id="${g.id}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}">${rampStops(g.ramp, g.p, g.invert)}</linearGradient>`;
+}).join("");
+
+/* ---- affine matrices, shared by canvas and SVG ---- */
+const mMul = (m, n) => [
+  m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1],
+  m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3],
+  m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5],
+];
+const mT = (x, y) => [1, 0, 0, 1, x, y];
+const mS = (x, y) => [x, 0, 0, y, 0, 0];
+const mR = (d) => { const a = d * Math.PI / 180, c = Math.cos(a), s = Math.sin(a); return [c, s, -s, c, 0, 0]; };
+const mSkewX = (d) => [1, 0, Math.tan(d * Math.PI / 180), 1, 0, 0];
+const mChain = (...ms) => ms.reduce(mMul);
+const mStr = (m) => `matrix(${m.map((v) => +v.toFixed(5)).join(" ")})`;
 
 /* ---------------- tile geometry ---------------- */
 const U = 1000;
 const GEN_KEYS = ["seed", "cols", "rows", "colMode", "rowMode", "stripeMode", "freqMin", "freqMax",
   "freqMapX", "freqMapY", "axisBias", "invertChance", "voidChance", "rampMode", "gamma", "stepMax", "pingPong"];
 const genParams = (L) => Object.fromEntries(GEN_KEYS.map((k) => [k, L[k]]));
+const tileKey = (P) => GEN_KEYS.map((k) => P[k]).join("|");
 
-function buildTile(P, reg) {
+/* Rects as plain numbers rather than markup — the canvas draws them directly
+   and the SVG exporter formats them only when exporting. */
+function buildTile(P) {
   const r = mulberry32(P.seed >>> 0);
   const cols = toOffsets(makeWeights(P.cols, P.colMode, r), U);
   const rows = toOffsets(makeWeights(P.rows, P.rowMode, r), U);
-  const out = [];
+  const rects = [], grads = new Set();
   rows.forEach((ro, ri) => {
     cols.forEach((co, ci) => {
       if (r() < P.voidChance) return;
@@ -98,34 +115,38 @@ function buildTile(P, reg) {
       const ramp = P.rampMode === "mixed" ? pick(RAMPS, r) : P.rampMode;
       const p = ramp === "steps" ? 2 + Math.round(r() * (P.stepMax - 2)) : P.gamma;
       const sw = toOffsets(makeWeights(freq, P.stripeMode, r), axis === "x" ? co.size : ro.size);
-      sw.forEach((s, si) => {
+      sw.forEach((sg, si) => {
         const flip = P.pingPong ? (baseFlip !== (si % 2 === 1)) : baseFlip;
         const dir = axis === "x" ? (flip ? "l" : "r") : (flip ? "u" : "d");
-        const gid = reg.id(ramp, p, dir, cellInvert);
-        const x = axis === "x" ? co.pos + s.pos : co.pos;
-        const y = axis === "x" ? ro.pos : ro.pos + s.pos;
-        const w = axis === "x" ? s.size : co.size;
-        const h = axis === "x" ? ro.size : s.size;
-        out.push(`<rect x="${+x.toFixed(2)}" y="${+y.toFixed(2)}" width="${+(w + 0.4).toFixed(2)}" height="${+(h + 0.4).toFixed(2)}" fill="url(#${gid})"/>`);
+        const g = gradRef(ramp, p, dir, cellInvert);
+        grads.add(g);
+        rects.push({
+          x: axis === "x" ? co.pos + sg.pos : co.pos,
+          y: axis === "x" ? ro.pos : ro.pos + sg.pos,
+          w: (axis === "x" ? sg.size : co.size) + 0.4,
+          h: (axis === "x" ? ro.size : sg.size) + 0.4,
+          g,
+        });
       });
     });
   });
-  return out.join("");
+  return { rects, grads: [...grads] };
 }
 
-/* geometry cache: one <g> per unique parameter set, referenced by <use> */
-class TileBank {
-  constructor(reg) { this.reg = reg; this.map = new Map(); }
-  ref(P) {
-    const k = GEN_KEYS.map((x) => P[x]).join("|");
-    if (!this.map.has(k)) this.map.set(k, { id: `pdt${this.map.size}`, markup: buildTile(P, this.reg) });
-    return this.map.get(k);
+const TILE_CACHE = new Map();
+const TILE_CACHE_MAX = 300;
+function tileGeom(P) {
+  const k = tileKey(P);
+  let e = TILE_CACHE.get(k);
+  if (!e) {
+    e = buildTile(P);
+    TILE_CACHE.set(k, e);
+    if (TILE_CACHE.size > TILE_CACHE_MAX) TILE_CACHE.delete(TILE_CACHE.keys().next().value);
   }
-  defs() { return [...this.map.values()].map((t) => `<g id="${t.id}">${t.markup}</g>`).join(""); }
+  return e;
 }
 
 /* ---------------- packing ---------------- */
-/* uniform repeat grid */
 function repeatCells(L, r) {
   const cw = toOffsets(makeWeights(Math.max(1, L.tileX | 0), L.tileMode, r), U);
   const ch = toOffsets(makeWeights(Math.max(1, L.tileY | 0), L.tileMode, r), U);
@@ -134,7 +155,6 @@ function repeatCells(L, r) {
   return out;
 }
 
-/* recursive binary split — always fills the box exactly, cell ratios vary */
 function collageCells(L, r) {
   let cells = [{ x: 0, y: 0, w: U, h: U }];
   const n = Math.max(1, L.cells | 0);
@@ -154,87 +174,112 @@ function collageCells(L, r) {
   return cells;
 }
 
-function layerContent(L, bank, tiles, expand) {
+/* instances: which tile goes in which cell, and the matrix that places it */
+function layerInstances(L, tiles, used) {
   const r = mulberry32((L.seed ^ 0x9e3779b9) >>> 0);
   const collage = L.mode === "collage";
   const cells = collage ? collageCells(L, r) : repeatCells(L, r);
-
-  const pool = collage
-    ? (tiles.filter((t) => t.on).map((t) => t.params).concat(tiles.some((t) => t.on) ? [] : [genParams(L)]))
-    : [genParams(L)];
-
+  const active = tiles.filter((t) => t.on);
+  const pool = collage && active.length ? active.map((t) => t.params) : [genParams(L)];
   const gap = collage ? L.gap : 0;
-  const parts = [];
-  cells.forEach((c) => {
+
+  return cells.map((c) => {
     const P = pool.length === 1 ? pool[0] : pick(pool, r);
-    const t = bank.ref(P);
+    const k = tileKey(P);
+    if (!used.has(k)) used.set(k, P);
     const rotate = collage ? (r() < L.rotChance ? pick([90, 180, 270], r) : 0)
       : (L.tileRot ? pick([0, 90, 180, 270], r) : 0);
-    const doFlip = collage ? r() < L.flipChance : L.tileFlip && r() < 0.5;
-    const fx = doFlip ? -1 : 1;
+    const fx = (collage ? r() < L.flipChance : L.tileFlip && r() < 0.5) ? -1 : 1;
     const fy = (collage ? r() < L.flipChance : L.tileFlip && r() < 0.5) ? -1 : 1;
     const w = Math.max(1, c.w - gap), h = Math.max(1, c.h - gap);
-    const tr = `translate(${(c.x + c.w / 2).toFixed(2)} ${(c.y + c.h / 2).toFixed(2)}) ` +
-      `scale(${(fx * w / U).toFixed(5)} ${(fy * h / U).toFixed(5)}) rotate(${rotate}) translate(${-U / 2} ${-U / 2})`;
-    parts.push(expand ? `<g transform="${tr}">${t.markup}</g>` : `<g transform="${tr}"><use href="#${t.id}"/></g>`);
+    return {
+      tile: k,
+      m: mChain(mT(c.x + c.w / 2, c.y + c.h / 2), mS(fx * w / U, fy * h / U), mR(rotate), mT(-U / 2, -U / 2)),
+    };
   });
-  return parts.join("");
 }
 
 /* Layers live in a square master the size of the canvas's longer edge, centred.
-   1:1 shows all of it; every other ratio is a crop of the same artwork, so
-   switching aspect never restretches the design. */
-function layerTransform(L, W, H) {
+   1:1 shows all of it; every other ratio is a crop of the same artwork. */
+function layerMatrix(L, W, H) {
   const M = Math.max(W, H);
   const ox = (W - M) / 2, oy = (H - M) / 2;
-  const bx = ox + (L.x / 100) * M, by = oy + (L.y / 100) * M;
   const bw = (L.w / 100) * M, bh = (L.h / 100) * M;
-  return [
-    `translate(${(bx + bw / 2).toFixed(2)} ${(by + bh / 2).toFixed(2)})`,
-    L.rot ? `rotate(${L.rot})` : "",
-    L.skew ? `skewX(${L.skew})` : "",
-    `scale(${((L.flipX ? -1 : 1) * bw / U).toFixed(5)} ${((L.flipY ? -1 : 1) * bh / U).toFixed(5)})`,
-    `translate(${-U / 2} ${-U / 2})`,
-  ].filter(Boolean).join(" ");
+  const cx = ox + (L.x / 100) * M + bw / 2, cy = oy + (L.y / 100) * M + bh / 2;
+  return mChain(
+    mT(cx, cy),
+    L.rot ? mR(L.rot) : [1, 0, 0, 1, 0, 0],
+    L.skew ? mSkewX(L.skew) : [1, 0, 0, 1, 0, 0],
+    mS((L.flipX ? -1 : 1) * bw / U, (L.flipY ? -1 : 1) * bh / U),
+    mT(-U / 2, -U / 2),
+  );
 }
 
-function buildSVG(doc, expand = false) {
+/* ---------------- model ---------------- */
+function buildModel(doc) {
   const { W, H, layers, bg, tiles } = doc;
-  const reg = new GradReg();
-  const bank = new TileBank(reg);
-  const built = layers.map((L) => ({ L, content: L.visible ? layerContent(L, bank, tiles, expand) : "" }));
+  const used = new Map();
+  const built = layers.filter((L) => L.visible).map((L) => ({
+    L, m: layerMatrix(L, W, H), inst: layerInstances(L, tiles, used),
+  }));
 
-  const masks = [], body = [];
+  /* a mask layer applies to the nearest paint layer beneath it */
+  const out = [];
   built.forEach((b, i) => {
-    const { L } = b;
-    if (!L.visible) return;
-    const g = `<g transform="${layerTransform(L, W, H)}">${b.content}</g>`;
-    if (L.role === "mask") {
-      const mid = `m_${L.id}`;
-      masks.push(`<mask id="${mid}" maskUnits="userSpaceOnUse" x="0" y="0" width="${W}" height="${H}" style="mask-type:luminance"><rect x="0" y="0" width="${W}" height="${H}" fill="${L.maskInvert ? "#fff" : "#000"}"/><g${L.maskInvert ? ' style="mix-blend-mode:difference"' : ""}>${g}</g></mask>`);
-      for (let j = i - 1; j >= 0; j--) if (built[j].L.visible && built[j].L.role === "paint") { built[j].maskId = mid; break; }
-      return;
+    if (b.L.role !== "mask") { out.push(b); return; }
+    for (let j = i - 1; j >= 0; j--) {
+      if (built[j].L.role === "paint") { built[j].mask = b; break; }
     }
-    b.paint = g;
-  });
-  built.forEach((b) => {
-    if (!b.paint) return;
-    const { L } = b;
-    const m = b.maskId ? ` mask="url(#${b.maskId})"` : "";
-    body.push(`<g id="${L.name.replace(/[^\w-]/g, "_")}" style="mix-blend-mode:${L.blend};opacity:${L.opacity}"${m}>${b.paint}</g>`);
   });
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">` +
-    `<defs>${reg.defs()}${expand ? "" : bank.defs()}${masks.join("")}</defs>` +
-    (bg !== "none" ? `<rect x="0" y="0" width="${W}" height="${H}" fill="${bg}"/>` : "") +
-    `<g style="isolation:isolate">${body.join("")}</g></svg>`;
+  const tileList = [...used.entries()].map(([k, P]) => ({ key: k, ...tileGeom(P) }));
+  const gradIds = new Set();
+  tileList.forEach((t) => t.grads.forEach((g) => gradIds.add(g)));
+
+  return { W, H, bg, tiles: tileList, gradIds, layers: out };
 }
 
+/* ---------------- SVG export ---------------- */
+const rectStr = (r) =>
+  `<rect x="${+r.x.toFixed(2)}" y="${+r.y.toFixed(2)}" width="${+r.w.toFixed(2)}" height="${+r.h.toFixed(2)}" fill="url(#${r.g})"/>`;
+
+function modelToSVG(m, expand) {
+  const tileMarkup = new Map(m.tiles.map((t) => [t.key, t.rects.map(rectStr).join("")]));
+  const body = (b) => b.inst.map((it) => expand
+    ? `<g transform="${mStr(it.m)}">${tileMarkup.get(it.tile)}</g>`
+    : `<g transform="${mStr(it.m)}"><use href="#t_${m.tiles.findIndex((t) => t.key === it.tile)}"/></g>`).join("");
+
+  const masks = [];
+  const groups = m.layers.map((b) => {
+    let maskAttr = "";
+    if (b.mask) {
+      const id = `m_${b.mask.L.id}`;
+      masks.push(`<mask id="${id}" maskUnits="userSpaceOnUse" x="0" y="0" width="${m.W}" height="${m.H}" style="mask-type:luminance">` +
+        `<rect x="0" y="0" width="${m.W}" height="${m.H}" fill="${b.mask.L.maskInvert ? "#fff" : "#000"}"/>` +
+        `<g${b.mask.L.maskInvert ? ' style="mix-blend-mode:difference"' : ""}><g transform="${mStr(b.mask.m)}">${body(b.mask)}</g></g></mask>`);
+      maskAttr = ` mask="url(#${id})"`;
+    }
+    return `<g id="${b.L.name.replace(/[^\w-]/g, "_")}" style="mix-blend-mode:${b.L.blend};opacity:${b.L.opacity}"${maskAttr}>` +
+      `<g transform="${mStr(b.m)}">${body(b)}</g></g>`;
+  }).join("");
+
+  const symbols = expand ? "" : m.tiles.map((t, i) => `<g id="t_${i}">${tileMarkup.get(t.key)}</g>`).join("");
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${m.W}" height="${m.H}" viewBox="0 0 ${m.W} ${m.H}">` +
+    `<defs>${gradDefs(m.gradIds)}${symbols}${masks.join("")}</defs>` +
+    (m.bg !== "none" ? `<rect x="0" y="0" width="${m.W}" height="${m.H}" fill="${m.bg}"/>` : "") +
+    `<g style="isolation:isolate">${groups}</g></svg>`;
+}
+const buildSVG = (doc, expand = false) => modelToSVG(buildModel(doc), expand);
+
+const TILE_THUMBS = new Map();
 function tilePreviewSVG(P) {
-  const reg = new GradReg();
-  const m = buildTile(P, reg);
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${U} ${U}" width="100%" height="100%" preserveAspectRatio="none">` +
-    `<defs>${reg.defs()}</defs><rect width="${U}" height="${U}" fill="#fff"/>${m}</svg>`;
+  const k = tileKey(P);
+  if (TILE_THUMBS.has(k)) return TILE_THUMBS.get(k);
+  const { rects, grads } = tileGeom(P);
+  const out = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${U} ${U}" width="100%" height="100%" preserveAspectRatio="none">` +
+    `<defs>${gradDefs(grads)}</defs><rect width="${U}" height="${U}" fill="#fff"/>${rects.map(rectStr).join("")}</svg>`;
+  TILE_THUMBS.set(k, out);
+  return out;
 }
 
 /* ---------------- data ---------------- */
@@ -361,6 +406,15 @@ const randCollage = (r, g = "medium") => {
   };
 };
 
+/* Layer count comes from the user's range, so the strategy is picked to suit
+   that depth: shallow stacks get heavy grain, deep stacks get finer grain. */
+function strategyFor(n, r) {
+  if (n <= 2) return pick(["chunky", "chunky", "chunky", "contrast", "contrast", "medium"], r);
+  if (n === 3) return pick(["chunky", "chunky", "contrast", "contrast", "contrast", "graded", "medium"], r);
+  if (n === 4) return pick(["contrast", "contrast", "chunky", "graded", "graded", "medium", "fine"], r);
+  return pick(["fine", "fine", "contrast", "graded", "graded", "medium"], r);
+}
+
 /* Which grain each layer in the stack gets. Chunky and contrast are weighted
    heavily — a fine mesh over heavy blocks is where the drama comes from. */
 function grainPlan(strategy, n, r) {
@@ -455,6 +509,7 @@ const CSS = `
 .pd .top { flex:none; height:44px; display:flex; align-items:center; gap:8px; padding:0 12px;
   border-bottom:1px solid var(--bd2); overflow-x:auto; scrollbar-width:none; }
 .pd .top::-webkit-scrollbar { display:none; }
+.pd .brandwrap { display:flex; align-items:center; gap:7px; }
 .pd .brand { font-size:11px; font-weight:600; letter-spacing:.24em; text-transform:uppercase; white-space:nowrap; }
 .pd .ver { font-size:9px; color:var(--t2); font-family:ui-monospace,monospace; }
 .pd .vr { width:1px; height:20px; background:var(--bd2); flex:none; }
@@ -474,6 +529,15 @@ const CSS = `
 .pd .iconbtn { color:var(--t1); display:inline-flex; align-items:center; }
 .pd .iconbtn:hover { color:var(--t0); }
 
+.pd .rangefield { display:flex; align-items:center; gap:5px; height:28px; padding:0 8px;
+  border:1px solid var(--bd2); }
+.pd .rangefield .cap { color:var(--t2); }
+.pd .rangefield .dash { color:var(--t2); font-size:10px; }
+.pd .mini { width:30px; height:20px; padding:0 3px; background:var(--s1); border:1px solid var(--bd);
+  color:var(--t0); font-size:10px; font-family:ui-monospace,monospace; text-align:center; outline:none; }
+.pd .mini:focus { border-color:#8a8a8a; }
+.pd .mini::-webkit-outer-spin-button, .pd .mini::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
+.pd .mini { -moz-appearance:textfield; }
 .pd .num-in { width:64px; height:28px; padding:0 7px; background:var(--s1); border:1px solid var(--bd);
   color:var(--t0); font-size:11px; font-family:ui-monospace,monospace; outline:none; }
 .pd .num-in:focus { border-color:#8a8a8a; }
@@ -589,6 +653,16 @@ const CSS = `
 .pd .pngbox img { max-width:100%; max-height:100%; object-fit:contain; }
 `;
 
+/* Prismdrifter lockup — wide wordmark, inherits colour from surrounding text */
+const LOGO_RATIO = 10.0047;
+const Mark = ({ h = 16 }) => (
+  <svg height={h} width={Math.round(h * LOGO_RATIO)} viewBox="0 0 1080 107.9493671" fill="currentColor"
+    xmlns="http://www.w3.org/2000/svg" aria-label="Prismdrifter" style={{ flex: "none", display: "block" }}>
+    <path d="M659.8234196,38.004383c-.1592684,14.0537835.5318129,32.4471239-.5087707,45.3895224-2.5378851,10.2761266-10.0677941-12.684-8.5720157-16.0001441.1664183-7.7280889,4.3587838-13.8006888,6.1298454-21.7413441,2.8451003-11.9879066-3.1889729-25.1475153-14.1772487-30.7057033-14.0080469-7.0884136-35.7711978-3.4219899-52.5974477-4.3127227-9.3904781.9287358-23.5776097-2.8242498-30.0388698,4.2437976-3.0553237,4.0612848-2.5459728,10.0133986-4.4610082,13.3666991-3.2306863,4.1133745-10.1214536-5.2803823-13.6899893-7.0395189-4.21827-3.0913813-9.071179-5.3580852-14.0600045-6.9187128-17.6893963-5.4208495-40.1806345-3.146867-58.4317677-3.6517784-13.9337357.2336713-28.8783272-.5536391-42.6460759.4747716-21.2553676,1.0661104-17.6582131,29.4342466-28.5610833,40.8867128-7.9776145-.5410525-9.8041047-31.5670448-19.4580087-37.2343855-5.2564935-4.1266191-12.5209408-3.9730823-18.979027-4.1122651-10.5860142.0067037-23.0181797-1.0867541-26.2748212,10.5962728-2.4802706,13.7337444-9.6401387-6.881003-29.2580333-9.5952447-17.3125352-3.219925-37.2729401-3.1116839-52.6273594,6.4767905-19.0192957,12.8945311-11.0563087,37.1251918,9.5027457,43.1371734,8.7026464,3.3047325,18.7698293,3.9114655,27.5967143,6.5619797,13.4688572,4.0396895,6.1719228,9.6690538-2.2615575,9.570034-11.2089554-.1772889-21.543372-6.677001-32.3894671-8.6038038-11.8623168-1.8358-16.8460638-6.6171715-16.2546251-19.839506-1.2672716-10.5589228,3.5708675-29.2239158-5.6474358-35.7789065-6.2927109-3.6358261-17.2444906-2.7871154-21.7895183,3.8601353-3.4757457,4.8329752-3.2385247,11.5556465-3.2564289,18.9948531-.0000347,8.077332-.000005,16.3950167-.0000149,26.5463.1319833,9.8657776,1.1646626,40.0048239-8.4082919,11.9435449-2.727065-10.2440383,2.8092239-18.821428,5.3922363-28.5691804,3.3906166-13.2560889-4.4068168-27.6925049-17.1540488-32.4269459-11.002-4.3723355-29.07407-2.4660587-42.7356432-2.8882398-11.9455141,1.0546003-28.4318236-3.2546228-37.5930084,4.6811042-7.393673,9.4014892-15.3160627-1.5938636-24.7539885-3.1534799-18.850103-3.0616979-41.159525-1.0073632-59.5818145-1.4367594-10.6354074-.3062242-13.2589176,3.8195829-12.7085164,14.7544729-.0431874,13.6490475-.0153724,38.5164341-.0160936,53.7011423.1608964,5.4182436-.6378111,12.3567753,4.3389283,15.5940475,6.2072632,3.5199109,17.4279806,2.9671026,22.6090175-3.4838036,4.3642014-5.2812457,4.1249339-13.5228132,10.7625319-17.0212278,6.8541085-3.7041225,15.5796946-2.3034366,24.044101-3.0471867,10.0749995.1672982,19.1484768-4.6000283,27.6783273-8.9641348,8.5345799-2.3514453,3.5420127,21.5439516,7.139389,26.7990852,3.1888379,8.6373509,15.8327926,9.8485914,22.8943829,4.5303282,6.3253495-4.6018819,5.5182329-13.8789931,11.2665681-18.9476119,6.2394741-6.0278902,15.2323862-3.4132523,21.4472304,1.9999773,6.4458319,5.6093464,9.7550039,14.4842414,18.0406463,17.9064364,8.8666859,3.9521185,19.9099184,2.3700732,30.0041083,2.7025033,8.7766887.7956312,20.7613705-1.161143,26.6028918-6.815706,7.7630497-6.9421311,16.701811,2.928509,25.0785453,4.5419264,13.9989518,3.8598094,29.3349839,4.1224576,43.4928515,1.4667955,9.9664463-.9691706,19.7304982-11.0876318,29.3907377-5.1232408,32.7182803,18.461063,26.7677011-17.4309024,27.5450975-37.7334475,1.1823763-16.7138056,8.9499388,12.144016,11.1776061,17.4985254,2.9625989,8.1995928,5.1310154,15.6694802,10.7132524,20.7616113,9.0474641,8.447061,23.7443151,4.877455,29.1097349-6.2365041,5.1038758-9.8069384,8.4058996-23.3237731,12.6544059-33.3057188,6.2493461-13.795079,4.2955206,13.5125935,4.5742617,19.0448575-.672662,12.8546735,1.2249764,26.227119,17.1778325,25.7839651,11.1648706.2740942,20.6591515.0449604,32.8550443.1167806,21.9664-.3248474,46.3456582,2.2120213,64.0611656-12.3142992,3.5737821-1.9541044,8.3283263-9.4642865,11.5826706-4.9125506,1.5540535,3.8649936,2.5865762,9.2998772,5.9701273,12.4383956,10.1750848,9.4966002,24.5678982,2.0063613,26.8309025-10.9486223,3.2331263-10.6218949,15.381561-13.4070567,23.9842992-6.3327384,8.3859475,6.0113477,11.7977489,17.5700767,22.5286032,20.3860612,7.5435226,2.4017609,16.8007595,1.5000587,25.3412518,1.683771,8.6764507-.5172543,18.8541922,1.6158077,26.3680843-3.0359469,7.5952006-4.9025801,2.0434592-56.8344806,3.6349819-67.7509476-.0962119-4.5231223.0302719-9.7293223-3.4524351-12.7304666-4.7172853-3.423611-12.8313153-3.5360515-18.3649487-1.1778513-9.9822582,4.6015055-8.6455239,15.0194388-8.811753,25.2928283v.1574437ZM76.0821419,45.4523609c-4.6982406,5.1009864-16.7878251,4.7459299-23.8584151,4.5399457-5.3573831-.3616316-10.5434081-1.7176148-12.7541522-6.2307285-1.2650866-2.7131288-.1637845-5.7598631,2.0621977-7.6438438,4.9232045-4.185162,12.9018122-3.7253874,20.0661319-3.4687396,5.3351162.1157823,13.5359611,1.7993845,15.3206546,5.8216091,1.183861,2.2402641.9430964,4.898162-.7639689,6.8983261l-.0724479.0834309ZM173.0194846,44.1872746c-2.3105345,2.5401046-5.7317984,3.4650189-10.6585396,4.0940388-7.198124.5152278-16.9080414,1.2843542-23.436965-1.3531596-6.9197422-2.9394923-6.8933288-9.5531713-.258035-12.4998923,3.6966735-1.7800086,9.3519374-2.0098857,15.2012686-1.9238174,7.4703288.3335541,14.8248971.0499631,19.2924277,4.7826916,1.6084228,2.0202748,1.6243946,4.7790077-.0739535,6.8207012l-.0662032.0794376ZM326.6767006,53.4070582c-3.568243-1.7094966-8.533385-4.8018089-13.1948978-6.4594706-7.923246-2.9915396-16.3294796-4.3122092-24.6293195-5.8245578-3.1318737-.5852506-6.3040717-1.2593583-9.2702762-2.3337926-8.4164961-2.8794882-10.749597-8.353739-3.3163719-11.4202942,5.0947143-2.1346761,11.4067737-1.3455353,16.4650543.6107401,6.7189493,2.576703,13.0708836,6.1411227,20.2024422,7.5853834,5.7172361,1.3584327,12.4301559,1.2365232,16.8331978,4.1583981,2.5060966,1.6124015,4.5125843,4.2310541,5.2971985,7.0607561,1.5873714,5.9700491-2.2340642,9.9216594-8.2579428,6.6824193l-.1290845-.0595818ZM527.1241373,55.271935c-.9350891,13.1687302-12.2319053,19.4752264-24.3771741,20.0848803-15.2938472,1.3057776-14.4499265-10.1872477-14.416784-21.7972216-.1229401-12.3979108-.2090193-22.5981874,15.5096171-20.9296816,12.9908219.9070212,23.8774774,8.4840291,23.2938523,22.4896243l-.0095113.1523986ZM625.730758,44.1872746c-2.3105345,2.5401046-5.7317984,3.4650189-10.6585396,4.0940388-7.198124.5152278-16.9080414,1.2843542-23.436965-1.3531596-6.9197422-2.9394923-6.8933288-9.5531713-.258035-12.4998923,3.6966735-1.7800086,9.3519374-2.0098857,15.2012686-1.9238174,7.4703288.3335541,14.8248971.0499631,19.2924277,4.7826916,1.6084228,2.0202748,1.6243946,4.7790077-.0739535,6.8207012l-.0662032.0794376Z"/>
+    <path d="M1062.5531947,65.5438102c1.0998602-7.5117345,6.5121116-13.6998482,7.5231013-21.3049718,2.3427255-12.4508101-5.2852621-25.4350743-16.7621041-29.863977-7.3755627-3.1667504-15.2954618-3.0011148-23.2617246-3.0936051-45.7872771-.0345216-94.4377784.0060868-139.8490578-.0089796-42.2414052.0048544-88.2481949-.0034345-130.445662.000048-17.1126577.0671392-42.5251976-.1165673-58.9495336.067681-5.1899463.1642362-7.7566799.7511077-8.8172061,3.4473236-.9963438,2.923397-.8864405,6.6700186-.9260815,10.0080556.3376122,17.4167986-.6274158,46.034831.3609293,64.0475881.5963157,4.2760936,2.8389958,6.2333073,7.3103647,7.0728302,5.6645807.921306,12.7948728,1.1099553,17.8279409-2.2342105,6.7438703-4.4242608,4.3000455-14.9397862,7.9200624-20.6067658,4.867166-6.9956342,16.9655802-4.4048854,24.6441843-4.9709752,6.8068439-.1486857,15.2200988.5542537,19.3875374-4.8053038,3.4115293-4.4575529,2.4085831-11.2413637-3.17046-14.2761055-3.059076-1.7122197-7.7545479-2.0809485-13.3110053-2.1197104-8.1944962-.5706329-24.1880186,2.1989243-28.162623-6.4761967-1.3115262-6.67904,12.1897626-8.3206762,18.9017051-7.9296817,6.2557688-.0123048,13.6700859-.0010288,19.6501107-.0048392,9.0853655-.0029434,17.4678007.0020847,26.4531732.0000457,7.823995.1845869,15.1760384-.5459306,19.9817068,2.5585365,3.942325,3.0834808,3.4154695,8.212084,3.6721728,13.0159946.4443418,11.2364478-.9343838,30.4818729.8524013,41.3584627,1.7808751,6.7656265,8.7543784,6.9880146,15.5073766,7.0759426,16.2903601.1474474,14.5355552-8.7995086,14.6306558-22.5285719.0070698-7.9844798-.0129522-16.2948696.0087923-24.2820202.2951058-7.8728303-.3302787-12.478404,4.9406185-15.3813122,6.2515088-2.4328226,18.5363184-2.5950109,24.8121069.2447902,5.1132191,3.3415247,4.1549398,8.1922667,4.4749002,16.4488151.0909605,11.1493792-.1884121,26.008675.1600484,36.3009296.1075407,4.5298323,1.2836633,8.5433262,5.5716374,8.9109314,19.8254358,1.1037384,52.1851904.1080545,70.8008945.432427,7.6509746.0013152,14.8124195-.0019231,22.4473885-.000671,5.273788-.0183585,11.127653.116552,15.4309195-2.0245649,7.4935335-3.2762717,6.3464722-12.6376444,10.1561224-18.5966492,4.8960895-7.1463012,14.9703198-6.7302605,21.9889207-2.0778714,7.2727814,4.4555686,9.4830638,13.7205248,16.3582289,18.555405,6.5622033,4.7322364,21.1495011,5.4876321,27.1192483,1.9558706,5.9554867-4.3213335-7.5174925-18.8964733-5.2539773-28.7855454l.0161861-.1291487ZM910.1290867,71.6020892c-3.3840687-4.5964518,5.1761844-6.8711405,8.561723-7.38637,8.5972169-1.1490914,19.0245623-.2490539,27.4356297-.6971657,3.4555883-.1837702,7.1397218-.5525274,10.0299246-2.4238273,5.712683-3.7556889,5.590584-11.6992319-.3979171-15.2623627-2.9589977-1.7127939-6.4834963-2.0199002-9.9916744-2.1938213-4.5994439-.1696981-9.6122217-.0810043-14.3488065-.1028834-5.9779894-.0004152-10.6558159.028832-15.2119156-1.0922974-5.139763-1.381211-7.7639016-3.3199843-6.2389689-5.8720813,1.3684202-2.5919641,9.6516076-4.2551846,15.6117555-4.0585391,7.8260022-.0390292,17.872305-.0224406,25.5107818-.0091924,12.5719948.0832934,17.2103741.4547469,17.242918,14.8402682.0941258,4.6799319.1198539,10.1769366-.0599511,14.8962228-.2350968,3.4934818-.3141061,7.0134346-2.3730151,9.8166906-2.0066289,2.607945-5.9184099,3.1824389-11.8925704,3.3165881-4.4674079.0875534-8.9315617.042341-13.5116877.0533603-8.679591-.4381412-24.6662757,1.7300728-30.3170787-3.7695042l-.0491471-.0550851ZM1036.1225851,44.1872746c-2.3105345,2.5401046-5.7317984,3.4650189-10.6585396,4.0940388-7.198124.5152278-16.9080414,1.2843542-23.436965-1.3531596-6.9197422-2.9394923-6.8933288-9.5531713-.258035-12.4998923,3.6966735-1.7800086,9.3519374-2.0098857,15.2012686-1.9238174,7.4703288.3335541,14.8248971.0499631,19.2924277,4.7826916,1.6084228,2.0202748,1.6243946,4.7790077-.0739535,6.8207012l-.0662032.0794376Z"/>
+  </svg>
+);
+
 /* ---------------- icons ---------------- */
 const I = ({ d, size = 18 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -662,17 +736,21 @@ function Slider({ v, set, min, max, step = 1 }) {
     try { trk.current.releasePointerCapture(e.pointerId); } catch { }
   };
 
-  /* wheel needs a non-passive listener to be able to preventDefault */
+  /* wheel needs a non-passive listener to preventDefault. Registered once and
+     reading live values from a ref, so it isn't torn down on every value change. */
+  const live = useRef({ v, step, clamp, set });
+  live.current = { v, step, clamp, set };
   useEffect(() => {
     const el = trk.current; if (!el) return;
     const h = (e) => {
       e.preventDefault();
+      const { v: cv, step: cs, clamp: cc, set: css } = live.current;
       const dir = (e.deltaY || e.deltaX) > 0 ? -1 : 1;
-      set(clamp(v + dir * step * (e.shiftKey ? 10 : 1)));
+      css(cc(cv + dir * cs * (e.shiftKey ? 10 : 1)));
     };
     el.addEventListener("wheel", h, { passive: false });
     return () => el.removeEventListener("wheel", h);
-  }, [v, step, clamp, set]);
+  }, []);
 
   const onKey = (e) => {
     const big = e.shiftKey ? 10 : 1;
@@ -726,28 +804,136 @@ const Act = ({ onClick, icon, label, on, hero, dis }) => (
   </button>
 );
 
-/* ---------------- artboard (double buffered) ---------------- */
-const Artboard = React.memo(function Artboard({ svg, w, h }) {
-  const html = useMemo(() => svg.replace(/width="\d+" height="\d+"/, 'width="100%" height="100%"'), [svg]);
-  const a = useRef(null), b = useRef(null);
-  const front = useRef(0);
-  const [, tick] = useReducer((x) => x + 1, 0);
+/* ---------------- artboard (canvas) ----------------
+   The preview is rasterised, not a DOM tree. A tile with 400 rects placed in
+   40 cells is 16,000 SVG nodes but only 400 fills: each unique tile is drawn
+   once into an offscreen canvas and every instance is a single blit. Moving a
+   placement slider costs nothing but blits. SVG is used for export only. */
+const RASTER = new Map();
+const RASTER_MAX = 40;
 
-  /* Write the new markup into the hidden buffer, then swap on the next frame.
-     Replacing innerHTML in place is what caused the white flash. */
+function rasterTile(tile, px) {
+  const key = `${tile.key}@${px}`;
+  const hit = RASTER.get(key);
+  if (hit) return hit;
+
+  const c = document.createElement("canvas");
+  c.width = px; c.height = px;
+  const g = c.getContext("2d");
+  const k = px / U;
+  for (const r of tile.rects) {
+    const gd = GRADS.get(r.g);
+    const [x1, y1, x2, y2] = DIRS[gd.dir];
+    const grad = g.createLinearGradient(
+      (r.x + x1 * r.w) * k, (r.y + y1 * r.h) * k,
+      (r.x + x2 * r.w) * k, (r.y + y2 * r.h) * k);
+    for (const [o, v] of gd.stops) grad.addColorStop(o, `rgb(${v},${v},${v})`);
+    g.fillStyle = grad;
+    g.fillRect(r.x * k, r.y * k, r.w * k, r.h * k);
+  }
+  RASTER.set(key, c);
+  if (RASTER.size > RASTER_MAX) RASTER.delete(RASTER.keys().next().value);
+  return c;
+}
+
+function paintLayer(ctx, b, rasters, scale) {
+  for (const it of b.inst) {
+    const img = rasters.get(it.tile);
+    if (!img) continue;
+    ctx.save();
+    const m = mMul(mMul([scale, 0, 0, scale, 0, 0], b.m), it.m);
+    ctx.setTransform(m[0], m[1], m[2], m[3], m[4], m[5]);
+    ctx.drawImage(img, 0, 0, U, U);
+    ctx.restore();
+  }
+}
+
+/* luminance of the mask becomes the alpha of the layer beneath it */
+function applyMask(layerCv, maskB, rasters, scale, invert) {
+  const mc = document.createElement("canvas");
+  mc.width = layerCv.width; mc.height = layerCv.height;
+  const mg = mc.getContext("2d");
+  mg.fillStyle = invert ? "#fff" : "#000";
+  mg.fillRect(0, 0, mc.width, mc.height);
+  paintLayer(mg, maskB, rasters, scale);
+  mg.setTransform(1, 0, 0, 1, 0, 0);
+
+  const d = mg.getImageData(0, 0, mc.width, mc.height);
+  const px = d.data;
+  for (let i = 0; i < px.length; i += 4) {
+    const lum = (px[i] * 0.2126 + px[i + 1] * 0.7152 + px[i + 2] * 0.0722);
+    px[i + 3] = invert ? 255 - lum : lum;
+  }
+  mg.putImageData(d, 0, 0);
+
+  const lg = layerCv.getContext("2d");
+  lg.setTransform(1, 0, 0, 1, 0, 0);
+  lg.globalCompositeOperation = "destination-in";
+  lg.drawImage(mc, 0, 0);
+  lg.globalCompositeOperation = "source-over";
+}
+
+const Artboard = React.memo(function Artboard({ model, w, h }) {
+  const ref = useRef(null);
+
   useEffect(() => {
-    const backIdx = 1 - front.current;
-    const back = backIdx === 0 ? a.current : b.current;
-    if (!back) return;
-    back.innerHTML = html;
-    const id = requestAnimationFrame(() => { front.current = backIdx; tick(); });
-    return () => cancelAnimationFrame(id);
-  }, [html]);
+    const cv = ref.current; if (!cv || !w || !h) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const cw = Math.max(1, Math.round(w * dpr)), ch = Math.max(1, Math.round(h * dpr));
+    if (cv.width !== cw || cv.height !== ch) { cv.width = cw; cv.height = ch; }
+    const ctx = cv.getContext("2d");
+
+    /* raster resolution scales with how large each instance actually lands */
+    const maxInst = model.layers.reduce((a, b) => Math.max(a, b.inst.length), 1);
+    const px = Math.max(192, Math.min(1024,
+      1 << Math.ceil(Math.log2(Math.max(192, cw / Math.sqrt(maxInst))))));
+    const rasters = new Map(model.tiles.map((t) => [t.key, rasterTile(t, px)]));
+
+    const scale = cw / model.W;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, cw, ch);
+    if (model.bg !== "none") { ctx.fillStyle = model.bg; ctx.fillRect(0, 0, cw, ch); }
+
+    /* layers composite against each other, not the background — matches the
+       isolation group used in the SVG export */
+    const stage = document.createElement("canvas");
+    stage.width = cw; stage.height = ch;
+    const sg = stage.getContext("2d");
+
+    model.layers.forEach((b, i) => {
+      let src = stage, sctx = sg, direct = true;
+      if (b.mask) { /* masked layers need their own surface first */
+        src = document.createElement("canvas");
+        src.width = cw; src.height = ch;
+        sctx = src.getContext("2d");
+        direct = false;
+      }
+      sctx.save();
+      if (direct) {
+        sg.globalCompositeOperation = i === 0 ? "source-over" : b.L.blend;
+        sg.globalAlpha = b.L.opacity;
+      }
+      paintLayer(sctx, b, rasters, scale);
+      sctx.restore();
+      if (!direct) {
+        applyMask(src, b.mask, rasters, scale, b.mask.L.maskInvert);
+        sg.setTransform(1, 0, 0, 1, 0, 0);
+        sg.globalCompositeOperation = i === 0 ? "source-over" : b.L.blend;
+        sg.globalAlpha = b.L.opacity;
+        sg.drawImage(src, 0, 0);
+      }
+      sg.setTransform(1, 0, 0, 1, 0, 0);
+      sg.globalCompositeOperation = "source-over";
+      sg.globalAlpha = 1;
+    });
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(stage, 0, 0);
+  }, [model, w, h]);
 
   return (
     <div className="art" style={{ width: w, height: h }}>
-      <div ref={a} style={{ opacity: front.current === 0 ? 1 : 0 }} />
-      <div ref={b} style={{ opacity: front.current === 1 ? 1 : 0 }} />
+      <canvas ref={ref} style={{ width: "100%", height: "100%", display: "block" }} />
     </div>
   );
 });
@@ -776,7 +962,7 @@ const TABS = [["Grid", Ico.grid], ["Stripe", Ico.stripe], ["Ramp", Ico.ramp],
 ["Tiles", Ico.bank], ["Looks", Ico.looks]];
 
 /* ---------------- app ---------------- */
-export default function PDLoomRift() {
+export default function VisualLoom() {
   const [W, setW] = useState(1600);
   const [H, setH] = useState(1600);
   const [bg, setBg] = useState("#ffffff");
@@ -788,6 +974,8 @@ export default function PDLoomRift() {
   const [sel, setSel] = useState(1);
   const [tab, setTab] = useState("Grid");
   const [expand, setExpand] = useState(true);
+  const [minLayers, setMinLayers] = useState(2);
+  const [maxLayers, setMaxLayers] = useState(5);
   const [msg, setMsg] = useState("");
   const [drawer, setDrawer] = useState(null);
   const [png, setPng] = useState(null);
@@ -797,15 +985,21 @@ export default function PDLoomRift() {
 
   const doc = useMemo(() => ({ W, H, bg, layers, tiles }), [W, H, bg, layers, tiles]);
   const previewDoc = useDeferredValue(doc);
-  const svg = useMemo(() => buildSVG(previewDoc, false), [previewDoc]);
-  const rectCount = useMemo(() => (svg.match(/<rect/g) || []).length, [svg]);
+  const model = useMemo(() => buildModel(previewDoc), [previewDoc]);
+  const rectCount = useMemo(() => {
+    let n = 0;
+    const per = new Map(model.tiles.map((t) => [t.key, t.rects.length]));
+    for (const b of model.layers) for (const it of b.inst) n += per.get(it.tile) || 0;
+    return n;
+  }, [model]);
   const L = layers.find((l) => l.id === sel) || layers[0];
 
   /* saved looks persist in localStorage */
   useEffect(() => {
     (async () => {
       try {
-        const raw = localStorage.getItem("pd_loomrift_looks")
+        const raw = localStorage.getItem("visual_loom_looks")
+          || localStorage.getItem("pd_loomrift_looks")
           || localStorage.getItem("pd_loomforge_looks")
           || localStorage.getItem("pd_tileforge_looks");
         if (raw) setLooks(JSON.parse(raw));
@@ -845,16 +1039,10 @@ export default function PDLoomRift() {
   const randomLook = () => {
     const r = mulberry32(Math.floor(Math.random() * 1e9));
 
-    /* Strategy first, then depth — chunky stacks stay shallow so the blocks
-       still read, fine ones can go deeper before they turn to mud. */
-    const strategy = pick([
-      "chunky", "chunky", "chunky",
-      "contrast", "contrast", "contrast",
-      "graded", "medium", "fine",
-    ], r);
-    const n = strategy === "chunky" ? pick([2, 2, 3, 3, 4], r)
-      : strategy === "fine" ? pick([3, 3, 4, 4, 5], r)
-        : pick([2, 3, 3, 4, 4], r);
+    /* depth first — the range is a hard constraint, style adapts to it */
+    const lo = Math.min(minLayers, maxLayers), hi = Math.max(minLayers, maxLayers);
+    const n = rint(r, lo, hi);
+    const strategy = strategyFor(n, r);
     const plan = grainPlan(strategy, n, r);
 
     const ls = plan.map((g, i) => {
@@ -925,7 +1113,7 @@ export default function PDLoomRift() {
   /* ---- look library ---- */
   const persistLooks = async (list) => {
     setLooks(list);
-    try { localStorage.setItem("pd_loomrift_looks", JSON.stringify(list)); } catch { }
+    try { localStorage.setItem("visual_loom_looks", JSON.stringify(list)); } catch { }
   };
   const saveLook = () => {
     const code = encodeLook(doc);
@@ -966,7 +1154,7 @@ export default function PDLoomRift() {
   const toggleTile = (id) => setTiles((ts) => ts.map((t) => (t.id === id ? { ...t, on: !t.on } : t)));
 
   /* ---- export ---- */
-  const openSVG = () => { tryDownload(svgDataUrl(buildSVG(doc, expand)), `PD_LoomRift_${Date.now()}.svg`); setDrawer("svg"); };
+  const openSVG = () => { tryDownload(svgDataUrl(buildSVG(doc, expand)), `VisualLoom_${Date.now()}.svg`); setDrawer("svg"); };
   const openPNG = () => {
     setDrawer("png"); setPng(null);
     const img = new Image();
@@ -976,7 +1164,7 @@ export default function PDLoomRift() {
         c.width = W; c.height = H;
         c.getContext("2d").drawImage(img, 0, 0, W, H);
         const url = c.toDataURL("image/png");
-        setPng(url); tryDownload(url, `PD_LoomRift_${Date.now()}.png`);
+        setPng(url); tryDownload(url, `VisualLoom_${Date.now()}.png`);
       } catch { setPng("error"); }
     };
     img.onerror = () => setPng("error");
@@ -984,7 +1172,7 @@ export default function PDLoomRift() {
   };
   const presetJSON = () => JSON.stringify({ v: 8, W, H, bg, layers, tiles }, null, 1);
   const openPreset = () => {
-    tryDownload("data:application/json;charset=utf-8," + encodeURIComponent(presetJSON()), "PD_LoomRift_preset.json");
+    tryDownload("data:application/json;charset=utf-8," + encodeURIComponent(presetJSON()), "VisualLoom_preset.json");
     setDrawer("preset");
   };
   const loadJSON = (e) => {
@@ -1025,8 +1213,8 @@ export default function PDLoomRift() {
 
       {/* ---- document bar ---- */}
       <div className="top">
-        <span className="brand">PD_LoomRift</span>
-        <span className="ver">1.5</span>
+        <span className="brandwrap"><Mark h={15} /><span className="brand">Visual Loom</span></span>
+        <span className="ver">1.6</span>
         <span className="vr" />
         <div style={{ display: "flex", gap: 3 }}>
           {SIZES.map(([n, w, h]) => (
@@ -1057,6 +1245,20 @@ export default function PDLoomRift() {
         <Act onClick={redo} icon={Ico.redo} label="Redo" dis={!canRedo} />
         <span className="vr" />
         <Act onClick={randomLook} icon={Ico.spark} label="Random look" hero />
+        <div className="rangefield" title="Layer count range for Random look">
+          <span className="cap">Layers</span>
+          <input className="mini" type="number" min={1} max={8} value={minLayers}
+            onChange={(e) => {
+              const v = Math.max(1, Math.min(8, +e.target.value || 1));
+              setMinLayers(v); if (v > maxLayers) setMaxLayers(v);
+            }} />
+          <span className="dash">–</span>
+          <input className="mini" type="number" min={1} max={8} value={maxLayers}
+            onChange={(e) => {
+              const v = Math.max(1, Math.min(8, +e.target.value || 1));
+              setMaxLayers(v); if (v < minLayers) setMinLayers(v);
+            }} />
+        </div>
         <Act onClick={() => setLayers((ls) => ls.map((l) => ({ ...l, seed: Math.floor(Math.random() * 1e5) })))} icon={Ico.dice} label="Reseed all" />
         <span className="vr" />
         <Act onClick={openSVG} icon={Ico.code} label="SVG" />
@@ -1278,7 +1480,7 @@ export default function PDLoomRift() {
         </div>
 
         <div className="stage" ref={stageRef}>
-          <Artboard svg={svg} w={fit.w} h={fit.h} />
+          <Artboard model={model} w={fit.w} h={fit.h} />
           <div className={`toast${msg ? " on" : ""}`}>{msg}</div>
           <div className="readout">
             {W}×{H} · {layers.filter((l) => l.visible).length}/{layers.length} layers · {tiles.length} tiles · {rectCount.toLocaleString()} shapes
