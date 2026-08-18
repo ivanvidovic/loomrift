@@ -574,6 +574,15 @@ const CSS = `
 .pd .mini:focus { border-color:#8a8a8a; }
 .pd .mini::-webkit-outer-spin-button, .pd .mini::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
 .pd .mini { -moz-appearance:textfield; }
+.pd .pngwrap { position:relative; display:inline-flex; }
+.pd .pngmenu { position:absolute; top:calc(100% + 4px); right:0; z-index:70; min-width:132px;
+  display:flex; flex-direction:column; background:var(--s2); border:1px solid var(--bd);
+  box-shadow:0 8px 24px rgba(0,0,0,.6); }
+.pd .pngmenu button { display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:6px 9px; text-align:left; }
+.pd .pngmenu button:hover { background:#2a2a2a; }
+.pd .pngmenu span { font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--t0); }
+.pd .pngmenu em { font-style:normal; font-size:9px; font-family:ui-monospace,monospace; color:var(--t2); }
 .pd .num-in { width:64px; height:28px; padding:0 7px; background:var(--s1); border:1px solid var(--bd);
   color:var(--t0); font-size:11px; font-family:ui-monospace,monospace; outline:none; }
 .pd .num-in:focus { border-color:#8a8a8a; }
@@ -1118,6 +1127,8 @@ export default function VisualLoom() {
   const [msg, setMsg] = useState("");
   const [drawer, setDrawer] = useState(null);
   const [png, setPng] = useState(null);
+  const [pngSize, setPngSize] = useState([0, 0]);
+  const [pngMenu, setPngMenu] = useState(false);
   const fileRef = useRef(null);
   const stageRef = useRef(null);
   const [fit, setFit] = useState({ w: 200, h: 200 });
@@ -1135,15 +1146,24 @@ export default function VisualLoom() {
     ls.forEach((l) => homeRef.current.set(l.id,
       { x: l.x, y: l.y, rot: l.rot, skew: l.skew, w: l.w, h: l.h, flipX: l.flipX, flipY: l.flipY }));
   };
+  const peekRef = useRef(false);
+  const [peek, setPeek] = useState(false);
   const glideRef = useRef(null);
   const glideRaf = useRef(0);
   const [autoDrift, setAutoDrift] = useState(false);
 
   const doc = useMemo(() => ({ W, H, bg, layers, tiles }), [W, H, bg, layers, tiles]);
-  const liveDoc = useMemo(() => (drift ? { ...doc, drift } : doc), [doc, drift]);
+  const liveDoc = useMemo(() => {
+    if (peek) {
+      /* hold to see the composition as it was generated — a view, never an edit */
+      const home = homeRef.current;
+      return { ...doc, layers: doc.layers.map((l) => ({ ...l, ...(home.get(l.id) || {}) })) };
+    }
+    return drift ? { ...doc, drift } : doc;
+  }, [doc, drift, peek]);
   /* drift must not be deferred — it needs to track the pointer */
   const previewDoc = useDeferredValue(liveDoc);
-  const shownDoc = drift ? liveDoc : previewDoc;
+  const shownDoc = (drift || peek) ? liveDoc : previewDoc;
   const model = useMemo(() => buildModel(shownDoc), [shownDoc]);
   const rectCount = useMemo(() => {
     let n = 0;
@@ -1383,6 +1403,47 @@ export default function VisualLoom() {
     return () => el.removeEventListener("wheel", h);
   }, [layers.length, drawer, help]);
 
+  /* ---- keyboard ----
+     Arrows nudge, Space rolls a new look, Tab held peeks at the generated
+     composition. All ignored while a text field has focus. */
+  useEffect(() => {
+    const typing = () => {
+      const t = document.activeElement?.tagName;
+      return t === "INPUT" || t === "TEXTAREA" || t === "SELECT";
+    };
+    const onDown = (e) => {
+      if (typing() || drawer || help) return;
+
+      if (e.code === "Space") {
+        e.preventDefault();
+        randomLook();
+        return;
+      }
+      if (e.key === "Tab" && layers.length) {
+        e.preventDefault();
+        if (peekRef.current) return;
+        peekRef.current = true;
+        setPeek(true);
+        return;
+      }
+      const step = e.shiftKey ? 0.06 : 0.012;     /* fine by default, coarse with shift */
+      const map = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+      const v = map[e.key];
+      if (!v || !layers.length) return;
+      e.preventDefault();
+      const d = e.altKey
+        ? { dx: 0, dy: 0, rx: v[0] * step }       /* alt+arrow twists */
+        : { dx: v[0] * step, dy: v[1] * step, rx: 0 };
+      commit(d);
+    };
+    const onUp = (e) => {
+      if (e.key === "Tab" && peekRef.current) { peekRef.current = false; setPeek(false); }
+    };
+    window.addEventListener("keydown", onDown);
+    window.addEventListener("keyup", onUp);
+    return () => { window.removeEventListener("keydown", onDown); window.removeEventListener("keyup", onUp); };
+  });
+
   const resetDrift = () => {
     if (!layers.length) return;
     setLayers((ls) => ls.map((l) => {
@@ -1479,6 +1540,7 @@ export default function VisualLoom() {
     try { localStorage.setItem("visual_loom_looks", JSON.stringify(list)); } catch { }
   };
   const saveLook = () => {
+    settle();
     const code = encodeLook(doc);
     const name = lookName.trim() || `Look ${looks.length + 1}`;
     persistLooks([...looks, { id: Date.now(), name, code }]);
@@ -1519,17 +1581,31 @@ export default function VisualLoom() {
   const toggleTile = (id) => setTiles((ts) => ts.map((t) => (t.id === id ? { ...t, on: !t.on } : t)));
 
   /* ---- export ---- */
-  const openSVG = () => { tryDownload(svgDataUrl(buildSVG(doc, expand)), `VisualLoom_${Date.now()}.svg`); setDrawer("svg"); };
-  const openPNG = () => {
-    setDrawer("png"); setPng(null);
+  /* Exports and saves read committed state, so any motion is settled first —
+     the coast is banked, auto-drift switched off, and the live offset cleared. */
+  const settle = () => {
+    if (autoDrift) setAutoDrift(false);
+    if (glideRaf.current) { cancelAnimationFrame(glideRaf.current); glideRaf.current = 0; }
+    const g = glideRef.current;
+    glideRef.current = null;
+    if (g) commit({ dx: g.dx, dy: g.dy, rx: g.rx });
+    if (dragRef.current) { rebase(dragRef.current); commit({ ...dragRef.current.acc }); dragRef.current = null; }
+    setDrift(null);
+  };
+
+  const openSVG = () => { settle(); tryDownload(svgDataUrl(buildSVG(doc, expand)), `VisualLoom_${Date.now()}.svg`); setDrawer("svg"); };
+  const openPNG = (frac = 1) => {
+    settle();
+    const w = Math.round(W * frac), h = Math.round(H * frac);
+    setDrawer("png"); setPng(null); setPngSize([w, h]);
     const img = new Image();
     img.onload = () => {
       try {
         const c = document.createElement("canvas");
-        c.width = W; c.height = H;
-        c.getContext("2d").drawImage(img, 0, 0, W, H);
+        c.width = w; c.height = h;
+        c.getContext("2d").drawImage(img, 0, 0, w, h);
         const url = c.toDataURL("image/png");
-        setPng(url); tryDownload(url, `VisualLoom_${Date.now()}.png`);
+        setPng(url); tryDownload(url, `VisualLoom_${w}x${h}.png`);
       } catch { setPng("error"); }
     };
     img.onerror = () => setPng("error");
@@ -1537,6 +1613,7 @@ export default function VisualLoom() {
   };
   const presetJSON = () => JSON.stringify({ v: 8, W, H, bg, layers, tiles }, null, 1);
   const openPreset = () => {
+    settle();
     tryDownload("data:application/json;charset=utf-8," + encodeURIComponent(presetJSON()), "VisualLoom_preset.json");
     setDrawer("preset");
   };
@@ -1554,6 +1631,23 @@ export default function VisualLoom() {
       } catch { flash("Couldn't read that file"); }
     };
     rd.readAsText(f); e.target.value = "";
+  };
+
+  /* Strip back to a single default layer — one square, one black-to-white
+     ramp — so the building block is visible again. */
+  const resetDoc = () => {
+    const n = newLayer({
+      name: "Base", cols: 1, rows: 1, freqMin: 1, freqMax: 1,
+      colMode: "even", rowMode: "even", stripeMode: "even",
+      axisBias: 1, invertChance: 0, voidChance: 0, rampMode: "linear",
+      gamma: 1, pingPong: false, mode: "repeat", tileX: 1, tileY: 1,
+      tileRot: false, tileFlip: false,
+    });
+    homeRef.current.clear();
+    rememberHome([n]);
+    setTiles([]); setLayers([n]); setSel(n.id); setTab("Grid");
+    setAutoDrift(false); setDrift(null);
+    flash("Reset to one gradient");
   };
 
   const addLayer = () => { const n = newLayer(); rememberHome([n]); setLayers((ls) => [...ls, n]); setSel(n.id); setTab("Layer"); };
@@ -1634,9 +1728,23 @@ export default function VisualLoom() {
         <Act onClick={() => setLayers((ls) => ls.map((l) => ({ ...l, seed: Math.floor(Math.random() * 1e5) })))} icon={Ico.dice} label="Reseed all" />
         <span className="vr" />
         <Act onClick={openSVG} icon={Ico.code} label="SVG" />
-        <Act onClick={openPNG} icon={Ico.image} label="PNG" />
+        <span className="pngwrap"
+          onMouseEnter={() => setPngMenu(true)} onMouseLeave={() => setPngMenu(false)}>
+          <Act onClick={() => { setPngMenu(false); openPNG(1); }} icon={Ico.image} label="PNG" />
+          {pngMenu && (
+            <span className="pngmenu">
+              {[[1, "Full"], [0.5, "Half"], [0.25, "Quarter"], [0.125, "Eighth"]].map(([f, n]) => (
+                <button key={n} onClick={() => { setPngMenu(false); openPNG(f); }}>
+                  <span>{n}</span>
+                  <em>{Math.round(W * f)}×{Math.round(H * f)}</em>
+                </button>
+              ))}
+            </span>
+          )}
+        </span>
         <Act onClick={openPreset} icon={Ico.save} label="Save" />
         <Act onClick={() => fileRef.current?.click()} icon={Ico.open} label="Load" />
+        <Act onClick={resetDoc} icon={Ico.reset} label="Reset" />
         <button className="iconbtn" style={{ marginLeft: 2 }} onClick={() => setHelp(true)} title="What is this?">{Ico.help}</button>
         <input ref={fileRef} type="file" accept=".json" onChange={loadJSON} style={{ display: "none" }} />
       </div>
@@ -1865,7 +1973,7 @@ export default function VisualLoom() {
           <div className={`toast${msg ? " on" : ""}`}>{msg}</div>
           {layers.length > 0 && (
             <div className="drifthint">
-              <span>Drag to drift · Shift twists · Alt goes far · Flick to coast · Wheel breathes</span>
+              <span>Drag · Shift twists · Alt far · Flick coasts · Wheel breathes · Arrows nudge · Tab peeks</span>
               <button className={`stepbtn${autoDrift ? " on" : ""}`}
                 onClick={(e) => { e.stopPropagation(); setAutoDrift(!autoDrift); }}
                 onPointerDown={(e) => e.stopPropagation()}
@@ -1933,6 +2041,12 @@ export default function VisualLoom() {
                     flick and release to keep coasting for a second or two.
                   </p>
                   <p>
+                    <b>Arrow keys</b> nudge by one small step, Shift-arrow by a larger one, and
+                    Alt-arrow twists. Hold <b>Tab</b> at any time to peek at the composition as it
+                    was generated, and let go to return to where you have drifted to.
+                    <b> Space</b> rolls a new look.
+                  </p>
+                  <p>
                     Let go and it sticks. Double-click returns every layer to the position it was generated at. In the corner,
                     <b> Auto</b> drifts on its own until you touch the canvas, and
                     <b> Step seeds</b> adds a fresh pattern jump as you sweep.
@@ -1965,8 +2079,10 @@ export default function VisualLoom() {
                   <h4>Getting it out</h4>
                   <p>
                     <b>SVG</b> is the real output — full vector, one named group per layer.
-                    <b> PNG</b> gives a flat image at canvas size. <b>Save</b> writes a preset file
-                    holding the whole document.
+                    <b> PNG</b> gives a flat image; hover the button for half, quarter and eighth
+                    sizes. <b>Save</b> writes a preset file holding the whole document.
+                    <b> Reset</b> strips everything back to a single black-to-white gradient, which
+                    is the block the whole tool is built from.
                   </p>
 
                   <h4>Aspect ratio</h4>
@@ -1983,7 +2099,7 @@ export default function VisualLoom() {
           {drawer && (
             <div className="drawer">
               <div className="drawerhead">
-                <span className="title">{drawer === "png" ? "PNG export" : drawer === "svg" ? "SVG export" : "Preset"}</span>
+                <span className="title">{drawer === "png" ? `PNG export · ${pngSize[0]}×${pngSize[1]}` : drawer === "svg" ? "SVG export" : "Preset"}</span>
                 {drawer !== "png" && (
                   <Act onClick={async () => flash((await copyText(drawerText)) ? "Copied" : "Clipboard blocked — select and copy")} icon={Ico.copy} label="Copy" />
                 )}
