@@ -225,12 +225,14 @@ function driftLayer(L, d, i, n) {
   /* front layers move most, back layers barely — that spread is the effect */
   const f = n < 2 ? 1 : 0.25 + 0.75 * (i / (n - 1));
   const sc = 1 + (d.dy || 0) * 0.55 * f;
+  /* deliberately unbounded: layers are free to travel past the frame.
+     The only guard is against a degenerate zero-scale matrix. */
   return {
     ...L,
     x: L.x + (d.dx || 0) * 45 * f,
     rot: L.rot + (d.rx || 0) * 60 * f,
-    w: L.w * sc,
-    h: L.h * sc,
+    w: Math.max(1, L.w * sc),
+    h: Math.max(1, L.h * sc),
   };
 }
 
@@ -434,7 +436,9 @@ function strategyFor(n, r) {
   if (n <= 2) return pick(["chunky", "chunky", "chunky", "contrast", "contrast", "medium"], r);
   if (n === 3) return pick(["chunky", "chunky", "contrast", "contrast", "contrast", "graded", "medium"], r);
   if (n === 4) return pick(["contrast", "contrast", "chunky", "graded", "graded", "medium", "fine"], r);
-  return pick(["fine", "fine", "contrast", "graded", "graded", "medium"], r);
+  if (n <= 7) return pick(["fine", "fine", "contrast", "graded", "graded", "medium"], r);
+  /* 8+ layers: heavy grain reads, fine grain stacks into noise */
+  return pick(["chunky", "chunky", "contrast", "contrast", "graded", "medium"], r);
 }
 
 /* Which grain each layer in the stack gets. Chunky and contrast are weighted
@@ -603,7 +607,7 @@ const CSS = `
 .pd .panelhead .title { font-size:10px; font-weight:600; letter-spacing:.2em; text-transform:uppercase; }
 .pd .panelhead .sub { font-size:10px; color:var(--t2); margin-left:auto; max-width:130px;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.pd .body { flex:1; min-height:0; padding:10px 12px; overflow-x:visible; }
+.pd .body { flex:1; min-height:120px; padding:10px 12px; overflow-x:visible; }
 
 .pd .row { display:flex; align-items:center; gap:10px; height:30px; }
 .pd .tip { position:absolute; left:0; bottom:calc(100% + 6px); z-index:40; width:210px;
@@ -635,11 +639,11 @@ const CSS = `
   padding:0 5px; outline:none; user-select:text; }
 .pd .vin:focus { border-color:#8a8a8a; color:var(--t0); }
 
-.pd .layers { flex:none; border-top:1px solid var(--bd2); }
+.pd .layers { flex:none; border-top:1px solid var(--bd2); display:flex; flex-direction:column; min-height:0; }
 .pd .layershead { height:30px; display:flex; align-items:center; gap:10px; padding:0 12px; }
 .pd .layershead .title { font-size:9.5px; font-weight:500; letter-spacing:.18em; text-transform:uppercase;
   color:var(--t1); margin-right:auto; }
-.pd .layerlist { max-height:150px; padding-bottom:4px; }
+.pd .layerlist { max-height:352px; padding-bottom:4px; }
 .pd .layeritem { display:flex; align-items:center; gap:8px; height:28px; padding:0 12px; cursor:pointer;
   border-left:2px solid transparent; }
 .pd .layeritem:hover { background:var(--s3); }
@@ -1123,6 +1127,17 @@ export default function VisualLoom() {
   const [stepSeed, setStepSeed] = useState(false);
   const dragRef = useRef(null);
   const rafRef = useRef(0);
+  /* Placement each layer was created with. Double-click returns here rather
+     than to a flat default, so reset restores the generated composition
+     instead of a different one. */
+  const homeRef = useRef(new Map());
+  const rememberHome = (ls) => {
+    ls.forEach((l) => homeRef.current.set(l.id,
+      { x: l.x, y: l.y, rot: l.rot, skew: l.skew, w: l.w, h: l.h, flipX: l.flipX, flipY: l.flipY }));
+  };
+  const glideRef = useRef(null);
+  const glideRaf = useRef(0);
+  const [autoDrift, setAutoDrift] = useState(false);
 
   const doc = useMemo(() => ({ W, H, bg, layers, tiles }), [W, H, bg, layers, tiles]);
   const liveDoc = useMemo(() => (drift ? { ...doc, drift } : doc), [doc, drift]);
@@ -1179,43 +1194,81 @@ export default function VisualLoom() {
      Drag anywhere on the artwork to slide the layers against each other.
      Held in a ref and pushed through rAF so pointer events never queue up
      behind a React render; released values are committed to the layers. */
-  /* Accumulated drift is kept separate from the live delta, so releasing shift
-     mid-drag rebases the origin instead of snapping. */
+  /* ---- drift transport ----
+     Accumulated drift is kept apart from the live delta, so releasing Shift
+     mid-drag rebases the origin instead of snapping. Distance is curved so a
+     drag starts precise and accelerates the further it is pulled, and release
+     velocity carries on as momentum. */
+  const ACCEL = 2.1;                   /* how hard the curve bites */
+  const curve = (v, boost) => {
+    const a = Math.abs(v);
+    return Math.sign(v) * (a + ACCEL * a * a) * boost;
+  };
+
   const emit = (d) => {
-    const raw = d.shift
-      ? { dx: d.acc.dx, dy: d.acc.dy, rx: d.acc.rx + (d.rx || 0) }
-      : { dx: d.acc.dx + (d.rawx || 0), dy: d.acc.dy + (d.rawy || 0), rx: d.acc.rx };
-    setDrift(raw);
+    const b = d.alt ? 8 : 1;
+    setDrift(d.shift
+      ? { dx: d.acc.dx, dy: d.acc.dy, rx: d.acc.rx + curve(d.rx || 0, b) }
+      : { dx: d.acc.dx + curve(d.rawx || 0, b), dy: d.acc.dy + curve(d.rawy || 0, b), rx: d.acc.rx });
   };
 
   const rebase = (d) => {
-    if (d.shift) d.acc.rx += d.rx || 0;
-    else { d.acc.dx += d.rawx || 0; d.acc.dy += d.rawy || 0; }
+    const b = d.alt ? 8 : 1;
+    if (d.shift) d.acc.rx += curve(d.rx || 0, b);
+    else { d.acc.dx += curve(d.rawx || 0, b); d.acc.dy += curve(d.rawy || 0, b); }
     d.rawx = 0; d.rawy = 0; d.rx = 0;
     d.x = d.lastX; d.y = d.lastY;
+  };
+
+  const commit = (cur) => {
+    if (!cur || (!cur.dx && !cur.dy && !cur.rx)) return;
+    setLayers((ls) => {
+      const vis = ls.filter((l) => l.visible);
+      const idx = new Map(vis.map((l, i) => [l.id, i]));
+      return ls.map((l) => idx.has(l.id) ? driftLayer(l, cur, idx.get(l.id), vis.length) : l);
+    });
   };
 
   const onStageDown = (e) => {
     if (!layers.length || drawer || help) return;
     if (e.target.closest(".drawer, .help, .drifthint")) return;
+    /* Grabbing mid-coast banks whatever the coast has travelled so far, then
+       starts the new drag from there. Without this the coast's distance was
+       discarded and the canvas snapped back to the pre-flick state. */
+    if (glideRaf.current) { cancelAnimationFrame(glideRaf.current); glideRaf.current = 0; }
+    const g = glideRef.current;
+    glideRef.current = null;
+    if (g) commit({ dx: g.dx, dy: g.dy, rx: g.rx });
+    if (autoDrift) setAutoDrift(false);
     e.currentTarget.setPointerCapture(e.pointerId);
     dragRef.current = {
-      x: e.clientX, y: e.clientY, lastX: e.clientX, lastY: e.clientY,
+      x: e.clientX, y: e.clientY, lastX: e.clientX, lastY: e.clientY, t: performance.now(),
       rect: e.currentTarget.getBoundingClientRect(),
       acc: { dx: 0, dy: 0, rx: 0 }, rawx: 0, rawy: 0, rx: 0,
-      shift: e.shiftKey, seeds: layers.map((l) => l.seed), crossed: 0,
+      vx: 0, vy: 0, vr: 0,
+      shift: e.shiftKey, alt: e.altKey, seeds: layers.map((l) => l.seed), crossed: 0,
     };
     setDrift({ dx: 0, dy: 0, rx: 0 });
   };
 
   const onStageMove = (e) => {
     const d = dragRef.current; if (!d) return;
-    d.lastX = e.clientX; d.lastY = e.clientY;
-    if (e.shiftKey !== d.shift) { rebase(d); d.shift = e.shiftKey; }
+    const now = performance.now();
+    const dt = Math.max(8, now - d.t);
+    const pvx = (e.clientX - d.lastX) / d.rect.width / dt;
+    const pvy = (e.clientY - d.lastY) / d.rect.height / dt;
+    d.vx = d.vx * 0.7 + pvx * 0.3;                 /* smoothed release velocity */
+    d.vy = d.vy * 0.7 + pvy * 0.3;
+    d.t = now; d.lastX = e.clientX; d.lastY = e.clientY;
+
+    if (e.shiftKey !== d.shift || e.altKey !== d.alt) {
+      rebase(d); d.shift = e.shiftKey; d.alt = e.altKey;
+    }
     const nx = (e.clientX - d.x) / Math.max(1, d.rect.width);
     const ny = (e.clientY - d.y) / Math.max(1, d.rect.height);
     if (d.shift) d.rx = nx; else { d.rawx = nx; d.rawy = ny; }
-    if (rafRef.current) return;                       /* coalesce to one per frame */
+
+    if (rafRef.current) return;                    /* coalesce to one per frame */
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = 0;
       emit(d);
@@ -1231,14 +1284,15 @@ export default function VisualLoom() {
     });
   };
 
-  /* shift can be pressed or released without moving the pointer */
+  /* Shift and Alt can be pressed or released without moving the pointer */
   useEffect(() => {
     const onKey = (e) => {
       const d = dragRef.current;
-      if (!d || e.key !== "Shift") return;
+      if (!d || (e.key !== "Shift" && e.key !== "Alt")) return;
       const down = e.type === "keydown";
-      if (down === d.shift) return;
-      rebase(d); d.shift = down; emit(d);
+      const which = e.key === "Shift" ? "shift" : "alt";
+      if (down === d[which]) return;
+      rebase(d); d[which] = down; emit(d);
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("keyup", onKey);
@@ -1249,26 +1303,68 @@ export default function VisualLoom() {
     const d = dragRef.current; if (!d) return;
     rebase(d);
     const cur = { ...d.acc };
+    const boost = d.alt ? 8 : 1;
+    /* velocity at release, in units of screen-widths per ms */
+    const fling = d.shift
+      ? { dx: 0, dy: 0, rx: d.vx * 95 * boost }
+      : { dx: d.vx * 95 * boost, dy: d.vy * 95 * boost, rx: 0 };
     dragRef.current = null;
     if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = 0; }
-    setDrift(null);
-    if (!cur.dx && !cur.dy && !cur.rx) return;
-    /* bake the drift into the layers so it becomes a real edit, undo-able */
-    setLayers((ls) => {
-      const vis = ls.filter((l) => l.visible);
-      const idx = new Map(vis.map((l, i) => [l.id, i]));
-      return ls.map((l) => idx.has(l.id)
-        ? driftLayer(l, cur, idx.get(l.id), vis.length) : l);
-    });
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { }
+
+    const speed = Math.hypot(fling.dx, fling.dy) + Math.abs(fling.rx);
+    if (speed < 0.035) { setDrift(null); commit(cur); return; }
+
+    /* coast on: keep the accumulated drift live and keep adding to it while
+       the velocity decays, then bake the whole travel in one edit */
+    glideRef.current = { ...cur, vdx: fling.dx, vdy: fling.dy, vrx: fling.rx };
+    const tick = () => {
+      const g = glideRef.current;
+      if (!g) return;
+      g.dx += g.vdx; g.dy += g.vdy; g.rx += g.vrx;
+      g.vdx *= 0.895; g.vdy *= 0.895; g.vrx *= 0.895;   /* fabric, not ice */
+      setDrift({ dx: g.dx, dy: g.dy, rx: g.rx });
+      if (Math.hypot(g.vdx, g.vdy) + Math.abs(g.vrx) > 0.0018) {
+        glideRaf.current = requestAnimationFrame(tick);
+      } else {
+        const final = { dx: g.dx, dy: g.dy, rx: g.rx };
+        glideRef.current = null;
+        setDrift(null);
+        commit(final);
+      }
+    };
+    glideRaf.current = requestAnimationFrame(tick);
   };
+
+  /* ---- auto drift ----
+     Wanders on its own from two slow sine waves of different periods, so it
+     never settles into a short loop. Touching the canvas switches it off.
+     Never committed to the layers — it is a view, not an edit. */
+  useEffect(() => {
+    if (!autoDrift || !layers.length) return;
+    let raf = 0;
+    const t0 = performance.now();
+    const tick = () => {
+      if (!dragRef.current && !glideRef.current) {
+        const t = (performance.now() - t0) / 1000;
+        setDrift({
+          dx: Math.sin(t * 0.21) * 0.9 + Math.sin(t * 0.067) * 0.5,
+          dy: Math.sin(t * 0.13 + 1.7) * 0.28,
+          rx: Math.sin(t * 0.089 + 0.6) * 0.35,
+        });
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => { cancelAnimationFrame(raf); setDrift(null); };
+  }, [autoDrift, layers.length]);
 
   /* Wheel drives layers apart in scale, alternating direction by depth, so the
      stack breathes through itself. Matrix-only like the drag, so it stays at
      frame rate; committed straight to the layers and covered by undo. */
   useEffect(() => {
     const el = stageRef.current; if (!el) return;
-    const cl = (v) => Math.max(15, Math.min(400, v));
+    const cl = (v) => Math.max(4, Math.min(1200, v));
     const h = (e) => {
       if (!layers.length || drawer || help) return;
       e.preventDefault();
@@ -1289,8 +1385,11 @@ export default function VisualLoom() {
 
   const resetDrift = () => {
     if (!layers.length) return;
-    setLayers((ls) => ls.map((l) => ({ ...l, x: 0, y: 0, rot: 0, w: 100, h: 100 })));
-    flash("Placement reset");
+    setLayers((ls) => ls.map((l) => {
+      const home = homeRef.current.get(l.id);
+      return home ? { ...l, ...home } : { ...l, x: 0, y: 0, rot: 0, skew: 0, w: 100, h: 100 };
+    }));
+    flash("Back to generated view");
   };
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 1800); };
 
@@ -1315,12 +1414,13 @@ export default function VisualLoom() {
         name: base ? "Base" : `Layer ${i + 1}`,
         ...randTile(r, g),
         ...(r() < collageOdds ? randCollage(r, g) : randRepeat(r, g)),
-        opacity: base ? 1 : (r() < 0.6 ? 1 : +rflt(r, 0.5, 0.95).toFixed(2)),
+        opacity: base ? 1 : (r() < (n <= 4 ? 0.6 : 0.3) ? 1 : +rflt(r, 0.45, 0.9).toFixed(2)),
         ...randPlace(r, base),
       });
     });
 
     trimToBudget(ls);
+    rememberHome(ls);
     setLayers(ls); setSel(ls[0].id);
     if (!savedHint) { setSavedHint(true); flash("Keep one you like — save it in Looks"); }
     else flash(`${strategy} · ${n} layers`);
@@ -1389,6 +1489,7 @@ export default function VisualLoom() {
     try {
       const d = decodeLook(code);
       setW(d.W); setH(d.H); setBg(d.bg);
+      rememberHome(d.layers);
       setLayers(d.layers); setTiles(d.tiles); setSel(d.layers[0]?.id);
       flash(label || "Look loaded");
     } catch { flash("That code isn't valid"); }
@@ -1448,14 +1549,15 @@ export default function VisualLoom() {
         setW(d.W); setH(d.H); setBg(d.bg || "#ffffff");
         const ls = d.layers.map((l) => ({ ...newLayer(), ...l, id: ++UID }));
         setTiles((d.tiles || []).map((t) => ({ ...t, id: ++TID })));
+        rememberHome(ls);
         setLayers(ls); setSel(ls[0]?.id); flash("Preset loaded");
       } catch { flash("Couldn't read that file"); }
     };
     rd.readAsText(f); e.target.value = "";
   };
 
-  const addLayer = () => { const n = newLayer(); setLayers((ls) => [...ls, n]); setSel(n.id); setTab("Layer"); };
-  const dupLayer = () => { if (!L) return; const n = { ...L, id: ++UID, name: L.name + " copy" }; setLayers((ls) => [...ls, n]); setSel(n.id); };
+  const addLayer = () => { const n = newLayer(); rememberHome([n]); setLayers((ls) => [...ls, n]); setSel(n.id); setTab("Layer"); };
+  const dupLayer = () => { if (!L) return; const n = { ...L, id: ++UID, name: L.name + " copy" }; rememberHome([n]); setLayers((ls) => [...ls, n]); setSel(n.id); };
   const delLayer = () => {
     if (!L || layers.length < 2) return;
     const i = layers.findIndex((l) => l.id === sel);
@@ -1517,15 +1619,15 @@ export default function VisualLoom() {
         </span>
         <div className="rangefield" title="Layer count range for Random look">
           <span className="cap">Layers</span>
-          <input className="mini" type="number" min={1} max={8} value={minLayers}
+          <input className="mini" type="number" min={1} max={12} value={minLayers}
             onChange={(e) => {
-              const v = Math.max(1, Math.min(8, +e.target.value || 1));
+              const v = Math.max(1, Math.min(12, +e.target.value || 1));
               setMinLayers(v); if (v > maxLayers) setMaxLayers(v);
             }} />
           <span className="dash">–</span>
-          <input className="mini" type="number" min={1} max={8} value={maxLayers}
+          <input className="mini" type="number" min={1} max={12} value={maxLayers}
             onChange={(e) => {
-              const v = Math.max(1, Math.min(8, +e.target.value || 1));
+              const v = Math.max(1, Math.min(12, +e.target.value || 1));
               setMaxLayers(v); if (v < minLayers) setMinLayers(v);
             }} />
         </div>
@@ -1763,7 +1865,11 @@ export default function VisualLoom() {
           <div className={`toast${msg ? " on" : ""}`}>{msg}</div>
           {layers.length > 0 && (
             <div className="drifthint">
-              <span>Drag to drift · Shift to twist · Wheel to breathe · Double-click resets</span>
+              <span>Drag to drift · Shift twists · Alt goes far · Flick to coast · Wheel breathes</span>
+              <button className={`stepbtn${autoDrift ? " on" : ""}`}
+                onClick={(e) => { e.stopPropagation(); setAutoDrift(!autoDrift); }}
+                onPointerDown={(e) => e.stopPropagation()}
+                title="Drift on its own until you touch the canvas">Auto</button>
               <button className={`stepbtn${stepSeed ? " on" : ""}`}
                 onClick={(e) => { e.stopPropagation(); setStepSeed(!stepSeed); }}
                 onPointerDown={(e) => e.stopPropagation()}
@@ -1822,8 +1928,14 @@ export default function VisualLoom() {
                     coarser steps.
                   </p>
                   <p>
-                    Let go and it sticks. Double-click to reset placement. <b>Step seeds</b> in the
-                    corner adds a fresh pattern jump as you sweep, on top of the smooth movement.
+                    Drags accelerate the further you pull, so short movements stay precise and
+                    long ones cover ground. Hold <b>Alt</b> to travel much faster still, and
+                    flick and release to keep coasting for a second or two.
+                  </p>
+                  <p>
+                    Let go and it sticks. Double-click returns every layer to the position it was generated at. In the corner,
+                    <b> Auto</b> drifts on its own until you touch the canvas, and
+                    <b> Step seeds</b> adds a fresh pattern jump as you sweep.
                   </p>
 
                   <h4>Then take it apart</h4>
