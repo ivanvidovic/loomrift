@@ -1,6 +1,6 @@
 # Visual Loom
 
-Procedural gradient-tile collage generator. Exports SVG (editable in Illustrator) and PNG.
+Procedural gradient-tile pattern generator. Exports vector SVG and PNG.
 
 ## Run locally
 
@@ -11,7 +11,7 @@ npm run dev
 
 ## Deploy to GitHub Pages
 
-1. Push this repo to GitHub with `main` as the default branch.
+1. Push to GitHub with `main` as the default branch.
 2. Repo **Settings → Pages → Build and deployment → Source: GitHub Actions**.
 3. Push. The workflow in `.github/workflows/deploy.yml` builds and publishes to
    `https://<user>.github.io/<repo>/`.
@@ -22,7 +22,6 @@ without editing config.
 ## Notes
 
 - Saved looks are stored in `localStorage`, per browser.
-- Illustrator strips `mix-blend-mode` on SVG import. Layer groups keep their
-  names, so blend modes can be reapplied per group after placing.
+- The preview renders to canvas for speed; exports are true vector.
 - "Expand geometry on export" duplicates tile geometry instead of using `<use>`
-  references. Leave it on for Illustrator.
+  references, producing a simpler file to edit downstream.

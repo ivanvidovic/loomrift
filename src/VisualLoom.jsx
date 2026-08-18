@@ -216,12 +216,32 @@ function layerMatrix(L, W, H) {
 }
 
 /* ---------------- model ---------------- */
+/* Drift: a live offset layered on top of each layer's stored placement.
+   Each layer responds at a different rate, so sliding them across one another
+   shifts the interference pattern continuously. Matrix-only — no geometry is
+   rebuilt, so it stays at frame rate on any stack. */
+function driftLayer(L, d, i, n) {
+  if (!d) return L;
+  /* front layers move most, back layers barely — that spread is the effect */
+  const f = n < 2 ? 1 : 0.25 + 0.75 * (i / (n - 1));
+  const sc = 1 + (d.dy || 0) * 0.55 * f;
+  return {
+    ...L,
+    x: L.x + (d.dx || 0) * 45 * f,
+    rot: L.rot + (d.rx || 0) * 60 * f,
+    w: L.w * sc,
+    h: L.h * sc,
+  };
+}
+
 function buildModel(doc) {
-  const { W, H, layers, bg, tiles } = doc;
+  const { W, H, layers, bg, tiles, drift } = doc;
+  const vis = layers.filter((L) => L.visible);
   const used = new Map();
-  const built = layers.filter((L) => L.visible).map((L) => ({
-    L, m: layerMatrix(L, W, H), inst: layerInstances(L, tiles, used),
-  }));
+  const built = vis.map((L0, i) => {
+    const L = driftLayer(L0, drift, i, vis.length);
+    return { L, m: layerMatrix(L, W, H), inst: layerInstances(L, tiles, used) };
+  });
 
   /* a mask layer applies to the nearest paint layer beneath it */
   const out = [];
@@ -345,8 +365,10 @@ function lookThumb(code) {
   THUMBS.set(code, html);
   return html;
 }
-const SIZES = [["1:1", 1600, 1600], ["16:9", 2560, 1440], ["9:16", 1440, 2560],
-["4:5", 1600, 2000], ["4:3", 3840, 2880], ["3:1", 2400, 800]];
+/* every preset shares a 3840px long edge, so switching ratio only changes
+   which part of the same square master is visible */
+const SIZES = [["1:1", 3840, 3840], ["16:9", 3840, 2160], ["9:16", 2160, 3840],
+["4:5", 3072, 3840], ["4:3", 3840, 2880], ["3:1", 3840, 1280]];
 const BLENDS = ["normal", "multiply", "screen", "overlay", "darken", "lighten",
   "color-dodge", "color-burn", "hard-light", "soft-light", "difference", "exclusion"];
 const SHAPE_BUDGET = 16000;
@@ -507,7 +529,7 @@ const CSS = `
 .pd .scroll::-webkit-scrollbar { width:0; height:0; display:none; }
 
 .pd .top { flex:none; height:44px; display:flex; align-items:center; gap:8px; padding:0 12px;
-  border-bottom:1px solid var(--bd2); overflow-x:auto; scrollbar-width:none; }
+  border-bottom:1px solid var(--bd2); overflow:visible; scrollbar-width:none; }
 .pd .top::-webkit-scrollbar { display:none; }
 .pd .brandwrap { display:flex; align-items:center; gap:7px; }
 .pd .brand { font-size:11px; font-weight:600; letter-spacing:.24em; text-transform:uppercase; white-space:nowrap; }
@@ -520,6 +542,16 @@ const CSS = `
 .pd .btn:hover { border-color:#5c5c5c; color:var(--t0); }
 .pd .btn.on { border-color:var(--bd3); color:var(--t0); background:var(--s2); }
 .pd .btn.dis { opacity:.3; pointer-events:none; }
+.pd .btn.glow { border-color:#7b3fd4; color:#fff;
+  box-shadow:0 0 0 1px rgba(123,63,212,.5), 0 0 14px 2px rgba(123,63,212,.55);
+  animation:pdglow 2.4s ease-in-out infinite; }
+.pd .btn.glow:hover { border-color:#9d6bf0;
+  box-shadow:0 0 0 1px rgba(157,107,240,.7), 0 0 20px 4px rgba(123,63,212,.8); }
+@keyframes pdglow {
+  0%, 100% { box-shadow:0 0 0 1px rgba(123,63,212,.45), 0 0 10px 1px rgba(123,63,212,.4); }
+  50%      { box-shadow:0 0 0 1px rgba(123,63,212,.7), 0 0 20px 4px rgba(123,63,212,.75); }
+}
+@media (prefers-reduced-motion: reduce) { .pd .btn.glow { animation:none; } }
 .pd .btn.hero { border-color:#7a7a7a; color:var(--t0); }
 .pd .btn.hero:hover { background:var(--s2); border-color:var(--bd3); }
 .pd .chip { height:28px; padding:0 8px; border:1px solid var(--bd2); color:var(--t2);
@@ -571,11 +603,19 @@ const CSS = `
 .pd .panelhead .title { font-size:10px; font-weight:600; letter-spacing:.2em; text-transform:uppercase; }
 .pd .panelhead .sub { font-size:10px; color:var(--t2); margin-left:auto; max-width:130px;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.pd .body { flex:1; min-height:0; padding:10px 12px; }
+.pd .body { flex:1; min-height:0; padding:10px 12px; overflow-x:visible; }
 
 .pd .row { display:flex; align-items:center; gap:10px; height:30px; }
+.pd .tip { position:absolute; left:0; bottom:calc(100% + 6px); z-index:40; width:210px;
+  padding:7px 9px; background:#1c1c1c; border:1px solid #4a4a4a; color:var(--t0);
+  font-size:10px; line-height:1.45; letter-spacing:0; text-transform:none; font-weight:400;
+  opacity:0; visibility:hidden; transition:opacity .12s ease .25s, visibility 0s linear .37s;
+  pointer-events:none; box-shadow:0 6px 18px rgba(0,0,0,.55); }
+.pd .lab.tipped { position:relative; cursor:help; }
+.pd .lab.tipped:hover { color:var(--t0); }
+.pd .lab.tipped:hover .tip { opacity:1; visibility:visible; transition-delay:.25s, .25s; }
 .pd .row > .lab { flex:none; width:80px; font-size:9.5px; letter-spacing:.08em; text-transform:uppercase;
-  color:var(--t1); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  color:var(--t1); white-space:nowrap; }
 .pd .row > .ctl { flex:1; min-width:0; display:flex; align-items:center; gap:8px; }
 .pd .note { font-size:10px; line-height:1.5; color:var(--t2); margin:10px 0 0; }
 .pd .stack { display:flex; flex-wrap:wrap; gap:6px; padding-top:10px; }
@@ -629,7 +669,7 @@ const CSS = `
   text-overflow:ellipsis; white-space:nowrap; }
 .pd .empty { font-size:10px; color:var(--t2); line-height:1.6; }
 
-.pd .stage { flex:1; min-width:0; min-height:0; position:relative; display:flex; align-items:center;
+.pd .stage { flex:1; min-width:0; min-height:0; position:relative; touch-action:none; display:flex; align-items:center;
   justify-content:center; background:var(--s1); overflow:hidden; }
 .pd .art { position:relative; border:1px solid #3a3a3a; overflow:hidden; }
 .pd .art > div { position:absolute; inset:0; }
@@ -637,6 +677,51 @@ const CSS = `
   background:rgba(11,11,11,.88); border:1px solid var(--bd2); color:var(--t1);
   font-size:9.5px; font-family:ui-monospace,monospace; opacity:0; transition:opacity .16s ease; }
 .pd .toast.on { opacity:1; }
+.pd .empty-stage { width:100%; height:100%; }
+
+/* coach mark: sits under the Random Look button and points back up at it */
+.pd .coachwrap { position:relative; display:inline-flex; }
+.pd .coach { position:absolute; top:calc(100% + 9px); left:50%; z-index:50;
+  transform:translateX(-50%); padding:5px 11px; white-space:nowrap;
+  background:#7b3fd4; color:#fff; font-size:9.5px; font-weight:600;
+  letter-spacing:.14em; text-transform:uppercase; pointer-events:none;
+  box-shadow:0 4px 16px rgba(123,63,212,.5);
+  animation:pdcoach 1.9s ease-in-out infinite; }
+.pd .coach .arrow { position:absolute; bottom:100%; left:50%; margin-left:-5px;
+  border-left:5px solid transparent; border-right:5px solid transparent;
+  border-bottom:5px solid #7b3fd4; }
+@keyframes pdcoach {
+  0%, 100% { transform:translateX(-50%) translateY(0); }
+  50%      { transform:translateX(-50%) translateY(4px); }
+}
+@media (prefers-reduced-motion: reduce) { .pd .coach { animation:none; } }
+
+.pd .help { position:absolute; inset:0; background:rgba(11,11,11,.97); display:flex;
+  flex-direction:column; z-index:60; }
+.pd .helphead { flex:none; height:40px; display:flex; align-items:center; gap:10px;
+  padding:0 16px; border-bottom:1px solid var(--bd2); }
+.pd .helphead .title { font-size:10px; font-weight:600; letter-spacing:.2em;
+  text-transform:uppercase; margin-right:auto; }
+.pd .helpbody { flex:1; min-height:0; overflow-y:auto; padding:20px 24px 28px;
+  scrollbar-width:none; }
+.pd .helpbody::-webkit-scrollbar { display:none; }
+.pd .helpbody .wrap { max-width:560px; margin:0 auto; }
+.pd .helpbody h4 { font-size:9.5px; font-weight:600; letter-spacing:.2em; text-transform:uppercase;
+  color:var(--t2); margin:22px 0 8px; padding-bottom:5px; border-bottom:1px solid var(--bd2); }
+.pd .helpbody h4:first-child { margin-top:0; }
+.pd .helpbody p { margin:0 0 9px; font-size:11.5px; line-height:1.65; color:var(--t1); }
+.pd .helpbody b { color:var(--t0); font-weight:500; }
+.pd .helpbody dl { margin:0; display:grid; grid-template-columns:74px 1fr; gap:7px 14px; }
+.pd .helpbody dt { font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--t0);
+  padding-top:2px; }
+.pd .helpbody dd { margin:0; font-size:11.5px; line-height:1.55; color:var(--t1); }
+.pd .drifthint { position:absolute; right:12px; top:10px; display:flex; align-items:center; gap:8px;
+  font-size:9px; font-family:ui-monospace,monospace; color:var(--t2); user-select:none; }
+.pd .drifthint span { opacity:.75; }
+.pd .stepbtn { padding:3px 7px; border:1px solid var(--bd2); color:var(--t2);
+  font-size:8.5px; letter-spacing:.1em; text-transform:uppercase; pointer-events:auto; }
+.pd .stepbtn:hover { border-color:#5c5c5c; color:var(--t0); }
+.pd .stepbtn.on { border-color:#7b3fd4; color:#c9a4ff; background:rgba(123,63,212,.16); }
 .pd .readout { position:absolute; left:12px; bottom:8px; font-size:9px; font-family:ui-monospace,monospace; color:var(--t2); }
 
 .pd .drawer { position:absolute; inset:0; background:rgba(11,11,11,.96); display:flex; flex-direction:column; }
@@ -690,6 +775,7 @@ const Ico = {
   save: <I d={<><path d="M4 4h12l4 4v12H4z" /><path d="M8 4v5h7M8 20v-6h8v6" /></>} size={15} />,
   open: <I d={<path d="M3 7h6l2 2h10v10H3z" />} size={15} />,
   close: <I d={<path d="M6 6l12 12M18 6 6 18" />} size={16} />,
+  help: <I d={<><circle cx="12" cy="12" r="9" /><path d="M9.2 9.3a2.9 2.9 0 1 1 3.6 3.4c-.6.2-.8.7-.8 1.3v.4" /><circle cx="12" cy="17.6" r=".7" fill="currentColor" /></>} size={17} />,
   reset: <I d={<><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" /></>} size={15} />,
   snap: <I d={<><rect x="5" y="5" width="14" height="14" /><path d="M5 12h14M12 5v14" /></>} size={15} />,
   looks: <I d={<><path d="M5 3h14v18l-7-5-7 5V3Z" /><path d="M9 8h6" /></>} size={20} />,
@@ -785,9 +871,56 @@ function Slider({ v, set, min, max, step = 1 }) {
   );
 }
 
+/* ---------------- tooltip copy ---------------- */
+const TIPS = {
+  "Columns": "How many vertical divisions the tile is cut into.",
+  "Col rhythm": "How column widths are decided. Even is uniform, dyadic halves repeatedly, random is free.",
+  "Rows": "How many horizontal divisions the tile is cut into.",
+  "Row rhythm": "How row heights are decided. Same options as columns.",
+  "Voids": "Chance that a cell is left empty, punching holes through to the layer below.",
+  "Seed": "The random number behind this layer. Same seed always gives the same pattern.",
+  "Min count": "Fewest gradient stripes a single cell can hold.",
+  "Max count": "Most gradient stripes a single cell can hold. High values give fine mesh, low give heavy blocks.",
+  "Widths": "How stripe widths vary inside a cell.",
+  "Density ↔": "Shifts stripe density from left to right across the tile.",
+  "Density ↕": "Shifts stripe density from top to bottom across the tile.",
+  "Vert bias": "How often stripes run vertically instead of horizontally.",
+  "Shape": "The gradient curve. Linear is a plain black-to-white ramp, triangle goes dark-light-dark, steps hard-edges it.",
+  "Gamma": "Bends the ramp toward the dark or light end.",
+  "Max steps": "How many hard bands a stepped ramp can be cut into.",
+  "Inverts": "Chance a cell flips its gradient, so light becomes dark.",
+  "Mode": "Repeat lays the tile in a regular grid. Collage cuts the canvas into cells of varying shape and stretches a tile into each.",
+  "Across": "How many times the tile repeats horizontally.",
+  "Down": "How many times the tile repeats vertically.",
+  "Cell sizes": "Whether repeated tiles are all the same size or vary.",
+  "Cells": "How many pieces the canvas is cut into.",
+  "Evenness": "Low makes cell sizes wildly uneven. High keeps them close to equal.",
+  "Ratio range": "How far cell proportions can stray from square.",
+  "Split axis": "Auto cuts along the longer side, keeping cells squarish. Random gives extreme shapes.",
+  "Gap": "Space between cells, showing the background through as a grid.",
+  "Rotate %": "Chance each cell's tile is turned by a quarter turn.",
+  "Flip %": "Chance each cell's tile is mirrored.",
+  "X %": "Moves the layer sideways.",
+  "Y %": "Moves the layer up and down.",
+  "Width %": "Stretches the layer horizontally. Over 100 pushes it past the canvas edge.",
+  "Height %": "Stretches the layer vertically.",
+  "Rotate": "Turns the whole layer. Off-square angles need width and height above 100 to keep the canvas covered.",
+  "Skew": "Slants the layer sideways.",
+  "Name": "What this layer is called. Carries through to the exported SVG as the group name.",
+  "Role": "Paint draws the layer. Mask uses its brightness to hide parts of the layer below.",
+  "Blend": "How this layer mixes with the ones under it. Difference is the default and gives the smoothest results.",
+  "Opacity": "How strongly this layer shows.",
+};
+
 /* ---------------- atoms ---------------- */
 const Row = ({ label, children }) => (
-  <div className="row"><div className="lab">{label}</div><div className="ctl">{children}</div></div>
+  <div className="row">
+    <div className={`lab${TIPS[label] ? " tipped" : ""}`}>
+      {label}
+      {TIPS[label] && <span className="tip">{TIPS[label]}</span>}
+    </div>
+    <div className="ctl">{children}</div>
+  </div>
 );
 const Sel = ({ v, set, opts }) => (
   <select className="sel" value={v} onChange={(e) => set(e.target.value)}>
@@ -797,8 +930,8 @@ const Sel = ({ v, set, opts }) => (
 const Toggle = ({ v, set, label }) => (
   <button className={`btn${v ? " on" : ""}`} onClick={() => set(!v)}>{label}</button>
 );
-const Act = ({ onClick, icon, label, on, hero, dis }) => (
-  <button className={`btn${on ? " on" : ""}${hero ? " hero" : ""}${dis ? " dis" : ""}`}
+const Act = ({ onClick, icon, label, on, hero, dis, glow }) => (
+  <button className={`btn${on ? " on" : ""}${hero ? " hero" : ""}${dis ? " dis" : ""}${glow ? " glow" : ""}`}
     onClick={onClick} disabled={dis} title={label}>
     {icon}<span>{label}</span>
   </button>
@@ -963,19 +1096,21 @@ const TABS = [["Grid", Ico.grid], ["Stripe", Ico.stripe], ["Ramp", Ico.ramp],
 
 /* ---------------- app ---------------- */
 export default function VisualLoom() {
-  const [W, setW] = useState(1600);
-  const [H, setH] = useState(1600);
+  const [W, setW] = useState(3840);
+  const [H, setH] = useState(3840);
   const [bg, setBg] = useState("#ffffff");
-  const [layers, setLayers] = useState([newLayer({ name: "Base" })]);
+  const [layers, setLayers] = useState([]);
   const [tiles, setTiles] = useState([]);
   const [looks, setLooks] = useState([]);
   const [lookName, setLookName] = useState("");
   const [importCode, setImportCode] = useState("");
-  const [sel, setSel] = useState(1);
+  const [sel, setSel] = useState(null);
   const [tab, setTab] = useState("Grid");
   const [expand, setExpand] = useState(true);
   const [minLayers, setMinLayers] = useState(2);
-  const [maxLayers, setMaxLayers] = useState(5);
+  const [maxLayers, setMaxLayers] = useState(6);
+  const [help, setHelp] = useState(false);
+  const [savedHint, setSavedHint] = useState(false);
   const [msg, setMsg] = useState("");
   const [drawer, setDrawer] = useState(null);
   const [png, setPng] = useState(null);
@@ -983,9 +1118,18 @@ export default function VisualLoom() {
   const stageRef = useRef(null);
   const [fit, setFit] = useState({ w: 200, h: 200 });
 
+  /* live drag state — declared before the document memos that read it */
+  const [drift, setDrift] = useState(null);
+  const [stepSeed, setStepSeed] = useState(false);
+  const dragRef = useRef(null);
+  const rafRef = useRef(0);
+
   const doc = useMemo(() => ({ W, H, bg, layers, tiles }), [W, H, bg, layers, tiles]);
-  const previewDoc = useDeferredValue(doc);
-  const model = useMemo(() => buildModel(previewDoc), [previewDoc]);
+  const liveDoc = useMemo(() => (drift ? { ...doc, drift } : doc), [doc, drift]);
+  /* drift must not be deferred — it needs to track the pointer */
+  const previewDoc = useDeferredValue(liveDoc);
+  const shownDoc = drift ? liveDoc : previewDoc;
+  const model = useMemo(() => buildModel(shownDoc), [shownDoc]);
   const rectCount = useMemo(() => {
     let n = 0;
     const per = new Map(model.tiles.map((t) => [t.key, t.rects.length]));
@@ -1030,6 +1174,124 @@ export default function VisualLoom() {
   }, [W, H]);
 
   const up = useCallback((patch) => setLayers((ls) => ls.map((l) => (l.id === sel ? { ...l, ...patch } : l))), [sel]);
+
+  /* ---- canvas drift ----
+     Drag anywhere on the artwork to slide the layers against each other.
+     Held in a ref and pushed through rAF so pointer events never queue up
+     behind a React render; released values are committed to the layers. */
+  /* Accumulated drift is kept separate from the live delta, so releasing shift
+     mid-drag rebases the origin instead of snapping. */
+  const emit = (d) => {
+    const raw = d.shift
+      ? { dx: d.acc.dx, dy: d.acc.dy, rx: d.acc.rx + (d.rx || 0) }
+      : { dx: d.acc.dx + (d.rawx || 0), dy: d.acc.dy + (d.rawy || 0), rx: d.acc.rx };
+    setDrift(raw);
+  };
+
+  const rebase = (d) => {
+    if (d.shift) d.acc.rx += d.rx || 0;
+    else { d.acc.dx += d.rawx || 0; d.acc.dy += d.rawy || 0; }
+    d.rawx = 0; d.rawy = 0; d.rx = 0;
+    d.x = d.lastX; d.y = d.lastY;
+  };
+
+  const onStageDown = (e) => {
+    if (!layers.length || drawer || help) return;
+    if (e.target.closest(".drawer, .help, .drifthint")) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragRef.current = {
+      x: e.clientX, y: e.clientY, lastX: e.clientX, lastY: e.clientY,
+      rect: e.currentTarget.getBoundingClientRect(),
+      acc: { dx: 0, dy: 0, rx: 0 }, rawx: 0, rawy: 0, rx: 0,
+      shift: e.shiftKey, seeds: layers.map((l) => l.seed), crossed: 0,
+    };
+    setDrift({ dx: 0, dy: 0, rx: 0 });
+  };
+
+  const onStageMove = (e) => {
+    const d = dragRef.current; if (!d) return;
+    d.lastX = e.clientX; d.lastY = e.clientY;
+    if (e.shiftKey !== d.shift) { rebase(d); d.shift = e.shiftKey; }
+    const nx = (e.clientX - d.x) / Math.max(1, d.rect.width);
+    const ny = (e.clientY - d.y) / Math.max(1, d.rect.height);
+    if (d.shift) d.rx = nx; else { d.rawx = nx; d.rawy = ny; }
+    if (rafRef.current) return;                       /* coalesce to one per frame */
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = 0;
+      emit(d);
+      if (stepSeed) {
+        const steps = Math.floor(Math.abs(d.acc.dx + (d.rawx || 0)) * 6);
+        if (steps !== d.crossed) {
+          d.crossed = steps;
+          const k = steps % Math.max(1, layers.length);
+          setLayers((ls) => ls.map((l, i) => i === k
+            ? { ...l, seed: (d.seeds[i] + steps * 977) % 100000 } : l));
+        }
+      }
+    });
+  };
+
+  /* shift can be pressed or released without moving the pointer */
+  useEffect(() => {
+    const onKey = (e) => {
+      const d = dragRef.current;
+      if (!d || e.key !== "Shift") return;
+      const down = e.type === "keydown";
+      if (down === d.shift) return;
+      rebase(d); d.shift = down; emit(d);
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKey);
+    return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("keyup", onKey); };
+  }, []);
+
+  const onStageUp = (e) => {
+    const d = dragRef.current; if (!d) return;
+    rebase(d);
+    const cur = { ...d.acc };
+    dragRef.current = null;
+    if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = 0; }
+    setDrift(null);
+    if (!cur.dx && !cur.dy && !cur.rx) return;
+    /* bake the drift into the layers so it becomes a real edit, undo-able */
+    setLayers((ls) => {
+      const vis = ls.filter((l) => l.visible);
+      const idx = new Map(vis.map((l, i) => [l.id, i]));
+      return ls.map((l) => idx.has(l.id)
+        ? driftLayer(l, cur, idx.get(l.id), vis.length) : l);
+    });
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { }
+  };
+
+  /* Wheel drives layers apart in scale, alternating direction by depth, so the
+     stack breathes through itself. Matrix-only like the drag, so it stays at
+     frame rate; committed straight to the layers and covered by undo. */
+  useEffect(() => {
+    const el = stageRef.current; if (!el) return;
+    const cl = (v) => Math.max(15, Math.min(400, v));
+    const h = (e) => {
+      if (!layers.length || drawer || help) return;
+      e.preventDefault();
+      const step = (e.shiftKey ? 0.075 : 0.028) * (e.deltaY > 0 ? -1 : 1);
+      setLayers((ls) => {
+        const vis = ls.filter((l) => l.visible);
+        const idx = new Map(vis.map((l, i) => [l.id, i]));
+        return ls.map((l) => {
+          if (!idx.has(l.id)) return l;
+          const k = 1 + step * (idx.get(l.id) % 2 === 0 ? 1 : -1);
+          return { ...l, w: cl(l.w * k), h: cl(l.h * k) };
+        });
+      });
+    };
+    el.addEventListener("wheel", h, { passive: false });
+    return () => el.removeEventListener("wheel", h);
+  }, [layers.length, drawer, help]);
+
+  const resetDrift = () => {
+    if (!layers.length) return;
+    setLayers((ls) => ls.map((l) => ({ ...l, x: 0, y: 0, rot: 0, w: 100, h: 100 })));
+    flash("Placement reset");
+  };
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 1800); };
 
   /* ---- random look ----
@@ -1060,7 +1322,8 @@ export default function VisualLoom() {
 
     trimToBudget(ls);
     setLayers(ls); setSel(ls[0].id);
-    flash(`${strategy} · ${n} layers`);
+    if (!savedHint) { setSavedHint(true); flash("Keep one you like — save it in Looks"); }
+    else flash(`${strategy} · ${n} layers`);
   };
 
   /* ---- history ----
@@ -1146,6 +1409,7 @@ export default function VisualLoom() {
 
   /* ---- tile bank ---- */
   const bakeTile = () => {
+    if (!L) return;
     const t = { id: ++TID, name: L.name, params: genParams(L), on: true };
     setTiles((ts) => [...ts, t]);
     flash(`Baked "${t.name}" to tiles`);
@@ -1191,14 +1455,15 @@ export default function VisualLoom() {
   };
 
   const addLayer = () => { const n = newLayer(); setLayers((ls) => [...ls, n]); setSel(n.id); setTab("Layer"); };
-  const dupLayer = () => { const n = { ...L, id: ++UID, name: L.name + " copy" }; setLayers((ls) => [...ls, n]); setSel(n.id); };
+  const dupLayer = () => { if (!L) return; const n = { ...L, id: ++UID, name: L.name + " copy" }; setLayers((ls) => [...ls, n]); setSel(n.id); };
   const delLayer = () => {
-    if (layers.length < 2) return;
+    if (!L || layers.length < 2) return;
     const i = layers.findIndex((l) => l.id === sel);
     const ls = layers.filter((l) => l.id !== sel);
     setLayers(ls); setSel(ls[Math.max(0, i - 1)].id);
   };
   const move = (d) => {
+    if (!L) return;
     const i = layers.findIndex((l) => l.id === sel), j = i + d;
     if (j < 0 || j >= layers.length) return;
     const ls = [...layers]; [ls[i], ls[j]] = [ls[j], ls[i]]; setLayers(ls);
@@ -1244,7 +1509,12 @@ export default function VisualLoom() {
         <Act onClick={undo} icon={Ico.undo} label="Undo" dis={!canUndo} />
         <Act onClick={redo} icon={Ico.redo} label="Redo" dis={!canRedo} />
         <span className="vr" />
-        <Act onClick={randomLook} icon={Ico.spark} label="Random look" hero />
+        <span className="coachwrap">
+          <Act onClick={randomLook} icon={Ico.spark} label="Random look" hero glow={!savedHint} />
+          {!savedHint && (
+            <span className="coach"><i className="arrow" />Start here</span>
+          )}
+        </span>
         <div className="rangefield" title="Layer count range for Random look">
           <span className="cap">Layers</span>
           <input className="mini" type="number" min={1} max={8} value={minLayers}
@@ -1265,6 +1535,7 @@ export default function VisualLoom() {
         <Act onClick={openPNG} icon={Ico.image} label="PNG" />
         <Act onClick={openPreset} icon={Ico.save} label="Save" />
         <Act onClick={() => fileRef.current?.click()} icon={Ico.open} label="Load" />
+        <button className="iconbtn" style={{ marginLeft: 2 }} onClick={() => setHelp(true)} title="What is this?">{Ico.help}</button>
         <input ref={fileRef} type="file" accept=".json" onChange={loadJSON} style={{ display: "none" }} />
       </div>
 
@@ -1371,7 +1642,7 @@ export default function VisualLoom() {
                 <Act onClick={bakeTile} icon={Ico.bake} label="Bake to tile" />
                 <Toggle v={expand} set={setExpand} label="Expand on export" />
               </div>
-              <p className="note">Illustrator strips blend modes on SVG import. Reapply them to the named layer groups after placing.</p>
+              <p className="note">Expanded exports duplicate geometry rather than referencing it, which keeps the file simple to edit downstream.</p>
             </>)}
 
             {tab === "Looks" && (<>
@@ -1479,12 +1750,123 @@ export default function VisualLoom() {
           </div>
         </div>
 
-        <div className="stage" ref={stageRef}>
-          <Artboard model={model} w={fit.w} h={fit.h} />
+        <div className="stage" ref={stageRef}
+          onPointerDown={onStageDown} onPointerMove={onStageMove}
+          onPointerUp={onStageUp} onPointerCancel={onStageUp}
+          onDoubleClick={resetDrift}
+          style={{ cursor: layers.length && !drawer && !help ? (drift ? "grabbing" : "grab") : "default" }}>
+          {layers.length === 0
+            ? (
+              <div className="empty-stage" />
+            )
+            : <Artboard model={model} w={fit.w} h={fit.h} />}
           <div className={`toast${msg ? " on" : ""}`}>{msg}</div>
-          <div className="readout">
-            {W}×{H} · {layers.filter((l) => l.visible).length}/{layers.length} layers · {tiles.length} tiles · {rectCount.toLocaleString()} shapes
-          </div>
+          {layers.length > 0 && (
+            <div className="drifthint">
+              <span>Drag to drift · Shift to twist · Wheel to breathe · Double-click resets</span>
+              <button className={`stepbtn${stepSeed ? " on" : ""}`}
+                onClick={(e) => { e.stopPropagation(); setStepSeed(!stepSeed); }}
+                onPointerDown={(e) => e.stopPropagation()}
+                title="Re-seed a layer as you sweep across">Step seeds</button>
+            </div>
+          )}
+
+          {layers.length > 0 && (
+            <div className="readout">
+              {W}×{H} · {layers.filter((l) => l.visible).length}/{layers.length} layers · {tiles.length} tiles · {rectCount.toLocaleString()} shapes
+            </div>
+          )}
+
+          {help && (
+            <div className="help">
+              <div className="helphead">
+                <span className="title">About</span>
+                <button className="iconbtn" onClick={() => setHelp(false)} title="Close">{Ico.close}</button>
+              </div>
+              <div className="helpbody">
+                <div className="wrap">
+                  <h4>What this is</h4>
+                  <p>
+                    A pattern generator built from one ingredient: a square filled with a
+                    black-to-white gradient. That square gets sliced into stripes, stacked into
+                    tiles, and those tiles get stretched, rotated and layered until the result
+                    stops looking like where it came from.
+                  </p>
+                  <p>
+                    Everything stays vector, so anything you make can be exported as an SVG at
+                    any size without losing quality.
+                  </p>
+
+                  <h4>Start here</h4>
+                  <p>
+                    Press <b>Random Look</b> and keep pressing. Each press builds a whole new
+                    design. The <b>Layers</b> range next to it sets how many layers get stacked —
+                    low numbers give simple heavy blocks, high numbers give dense fine detail.
+                  </p>
+                  <p>
+                    When something lands, open <b>Looks</b> and save it. Saved designs come back
+                    exactly as they were, and can be copied out as a short code to share.
+                  </p>
+
+                  <h4>Drag the canvas</h4>
+                  <p>
+                    Drag anywhere on the artwork to slide the layers against each other. Each
+                    layer moves at a different rate, so the pattern shifts continuously rather
+                    than just panning. Drag sideways to slide and up or down to scale. Hold
+                    <b> Shift</b> at any point during a drag to switch to twisting them apart,
+                    and let go of it to carry on sliding.
+                  </p>
+                  <p>
+                    The <b>wheel</b> pushes alternate layers apart in scale — one set growing while
+                    the next shrinks — so the stack breathes through itself. Hold Shift for
+                    coarser steps.
+                  </p>
+                  <p>
+                    Let go and it sticks. Double-click to reset placement. <b>Step seeds</b> in the
+                    corner adds a fresh pattern jump as you sweep, on top of the smooth movement.
+                  </p>
+
+                  <h4>Then take it apart</h4>
+                  <p>
+                    The icons down the left edit whichever layer is selected at the bottom.
+                    Hover any control's name for a one-line explanation.
+                  </p>
+                  <dl>
+                    <dt>Grid</dt><dd>How the tile is divided into cells, and the seed behind it.</dd>
+                    <dt>Stripe</dt><dd>How many gradient bands fill each cell. The main coarse-to-fine control.</dd>
+                    <dt>Ramp</dt><dd>The shape of the gradient itself — smooth, stepped, or peaked.</dd>
+                    <dt>Layout</dt><dd>Tile the canvas in a regular grid, or cut it into cells of varying shape.</dd>
+                    <dt>Place</dt><dd>Move, scale, rotate and skew the whole layer.</dd>
+                    <dt>Layer</dt><dd>Blend mode, opacity, and whether the layer paints or masks.</dd>
+                    <dt>Tiles</dt><dd>Save a layer's pattern for reuse, then mix several in a collage.</dd>
+                    <dt>Looks</dt><dd>Save, restore and share whole designs.</dd>
+                  </dl>
+
+                  <h4>Layers</h4>
+                  <p>
+                    Add layers with the <b>+</b> at the bottom left. Every layer defaults to the
+                    <b> difference</b> blend mode, which is what makes stacked gradients interact
+                    instead of just covering each other. Two layers of the same pattern, one
+                    slightly rotated, is usually more interesting than either alone.
+                  </p>
+
+                  <h4>Getting it out</h4>
+                  <p>
+                    <b>SVG</b> is the real output — full vector, one named group per layer.
+                    <b> PNG</b> gives a flat image at canvas size. <b>Save</b> writes a preset file
+                    holding the whole document.
+                  </p>
+
+                  <h4>Aspect ratio</h4>
+                  <p>
+                    The presets at the top crop rather than stretch. A design is always built in a
+                    square and the canvas shows a window onto it, so switching between 1:1 and
+                    16:9 never distorts what you made.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {drawer && (
             <div className="drawer">
@@ -1499,7 +1881,7 @@ export default function VisualLoom() {
                 <p className="note" style={{ margin: 0 }}>
                   {drawer === "png"
                     ? "A download was attempted. If nothing saved, right-click the image and choose Save image as."
-                    : "A download was attempted. If nothing saved, copy the source below and paste straight into Illustrator."}
+                    : "A download was attempted. If nothing saved, copy the source below."}
                 </p>
                 {drawer === "png" ? (
                   <div className="pngbox">
