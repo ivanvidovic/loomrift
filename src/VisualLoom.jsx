@@ -533,7 +533,30 @@ const CSS = `
 .pd .scroll::-webkit-scrollbar { width:0; height:0; display:none; }
 
 .pd .top { flex:none; height:44px; display:flex; align-items:center; gap:8px; padding:0 12px;
-  border-bottom:1px solid var(--bd2); overflow:visible; scrollbar-width:none; }
+  border-bottom:1px solid var(--bd2); overflow:visible; min-width:0; }
+/* stage one: button labels drop, icons carry the meaning (titles still on hover) */
+.pd .top.compact .btn span { display:none; }
+.pd .top.compact .btn { padding:0 7px; gap:0; }
+.pd .top.compact { gap:6px; }
+/* stage two: the wordmark goes, the mark stays */
+.pd .top.mini .brand, .pd .top.mini .ver { display:none; }
+.pd .top.mini .vr { display:none; }
+
+.pd .sizechips { display:flex; gap:3px; }
+.pd .dims { display:flex; align-items:center; gap:5px; }
+.pd .dims .x { color:var(--t2); font-size:10px; }
+.pd .grounds { display:flex; align-items:center; gap:4px; }
+.pd .grounds .glabel { color:var(--t1); white-space:nowrap; }
+
+/* canvas controls folded into a popover on narrow screens */
+.pd .docwrap { position:relative; display:inline-flex; }
+.pd .docmenu { position:absolute; top:calc(100% + 4px); left:0; z-index:70;
+  display:flex; flex-wrap:wrap; align-items:center; gap:8px; width:max-content; max-width:min(92vw, 460px);
+  padding:10px; background:var(--s2); border:1px solid var(--bd);
+  box-shadow:0 8px 24px rgba(0,0,0,.6); }
+.pd .docmenu::before { content:""; position:absolute; left:0; right:0; bottom:100%; height:8px; }
+.pd .docmenu .vr { display:none; }
+.pd .docmenu .sizechips, .pd .docmenu .grounds { flex-wrap:wrap; }
 .pd .top::-webkit-scrollbar { display:none; }
 .pd .brandwrap { display:flex; align-items:center; gap:7px; }
 .pd .brand { font-size:11px; font-weight:600; letter-spacing:.24em; text-transform:uppercase; white-space:nowrap; }
@@ -568,13 +591,19 @@ const CSS = `
 .pd .rangefield { display:flex; align-items:center; gap:5px; height:28px; padding:0 8px;
   border:1px solid var(--bd2); }
 .pd .rangefield .cap { color:var(--t2); }
+.pd .top.compact .rangefield .cap { display:none; }
+.pd .top.compact .rangefield { padding:0 6px; }
 .pd .rangefield .dash { color:var(--t2); font-size:10px; }
 .pd .mini { width:30px; height:20px; padding:0 3px; background:var(--s1); border:1px solid var(--bd);
   color:var(--t0); font-size:10px; font-family:ui-monospace,monospace; text-align:center; outline:none; }
 .pd .mini:focus { border-color:#8a8a8a; }
 .pd .mini::-webkit-outer-spin-button, .pd .mini::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
 .pd .mini { -moz-appearance:textfield; }
+/* The wrapper's hover area has to span the button AND the menu, otherwise
+   crossing the gap between them fires mouseleave and the menu closes before
+   it can be clicked. A pseudo-element bridges the gap. */
 .pd .pngwrap { position:relative; display:inline-flex; }
+.pd .pngmenu::before { content:""; position:absolute; left:0; right:0; bottom:100%; height:8px; }
 .pd .pngmenu { position:absolute; top:calc(100% + 4px); right:0; z-index:70; min-width:132px;
   display:flex; flex-direction:column; background:var(--s2); border:1px solid var(--bd);
   box-shadow:0 8px 24px rgba(0,0,0,.6); }
@@ -583,6 +612,11 @@ const CSS = `
 .pd .pngmenu button:hover { background:#2a2a2a; }
 .pd .pngmenu span { font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--t0); }
 .pd .pngmenu em { font-style:normal; font-size:9px; font-family:ui-monospace,monospace; color:var(--t2); }
+.pd .pngmenu.wide { min-width:184px; }
+.pd .pngmenu .menuhead { padding:6px 9px 4px; font-size:8.5px; letter-spacing:.18em;
+  text-transform:uppercase; color:var(--t2); border-bottom:1px solid var(--bd2); }
+.pd .pngmenu button.on { background:rgba(123,63,212,.15); }
+.pd .pngmenu button.on span { color:#c9a4ff; }
 .pd .num-in { width:64px; height:28px; padding:0 7px; background:var(--s1); border:1px solid var(--bd);
   color:var(--t0); font-size:11px; font-family:ui-monospace,monospace; outline:none; }
 .pd .num-in:focus { border-color:#8a8a8a; }
@@ -690,7 +724,16 @@ const CSS = `
   background:rgba(11,11,11,.88); border:1px solid var(--bd2); color:var(--t1);
   font-size:9.5px; font-family:ui-monospace,monospace; opacity:0; transition:opacity .16s ease; }
 .pd .toast.on { opacity:1; }
-.pd .empty-stage { width:100%; height:100%; }
+.pd .empty-stage { width:100%; height:100%; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; gap:22px; padding:0 32px; text-align:center; }
+.pd .empty-stage .lead { max-width:430px; margin:0; font-size:12.5px; line-height:1.75;
+  color:var(--t1); letter-spacing:.01em; }
+.pd .empty-stage .cta { margin:0; display:flex; align-items:center; gap:8px;
+  font-size:10px; font-weight:600; letter-spacing:.2em; text-transform:uppercase; color:#a97cf0; }
+.pd .empty-stage kbd { display:inline-flex; align-items:center; padding:4px 12px;
+  border:1px solid rgba(169,124,240,.55); background:rgba(123,63,212,.14); color:#c9a4ff;
+  font:inherit; letter-spacing:.16em; }
+.pd .empty-stage .alt { margin:-10px 0 0; font-size:10px; letter-spacing:.06em; color:var(--t2); }
 
 /* coach mark: sits under the Random Look button and points back up at it */
 .pd .coachwrap { position:relative; display:inline-flex; }
@@ -950,6 +993,21 @@ const Act = ({ onClick, icon, label, on, hero, dis, glow }) => (
   </button>
 );
 
+/* Hover menus open at once and close on a delay, so moving diagonally toward
+   an option — or clipping the edge of the button — cannot dismiss them. */
+function useHoverMenu(delay = 160) {
+  const [open, setOpen] = useState(false);
+  const t = useRef(0);
+  useEffect(() => () => clearTimeout(t.current), []);
+  return {
+    open, setOpen,
+    bind: {
+      onMouseEnter: () => { clearTimeout(t.current); setOpen(true); },
+      onMouseLeave: () => { clearTimeout(t.current); t.current = setTimeout(() => setOpen(false), delay); },
+    },
+  };
+}
+
 /* ---------------- artboard (canvas) ----------------
    The preview is rasterised, not a DOM tree. A tile with 400 rects placed in
    40 cells is 16,000 SVG nodes but only 400 fills: each unique tile is drawn
@@ -1128,9 +1186,20 @@ export default function VisualLoom() {
   const [drawer, setDrawer] = useState(null);
   const [png, setPng] = useState(null);
   const [pngSize, setPngSize] = useState([0, 0]);
-  const [pngMenu, setPngMenu] = useState(false);
+  const pngM = useHoverMenu();
+  const svgM = useHoverMenu();
+  const [svgMode, setSvgMode] = useState(true);
   const fileRef = useRef(null);
   const stageRef = useRef(null);
+  const barRef = useRef(null);
+  const [barW, setBarW] = useState(1600);
+  const [docMenu, setDocMenu] = useState(false);
+  useEffect(() => {
+    if (!docMenu) return;
+    const away = (e) => { if (!e.target.closest(".docwrap")) setDocMenu(false); };
+    window.addEventListener("pointerdown", away);
+    return () => window.removeEventListener("pointerdown", away);
+  }, [docMenu]);
   const [fit, setFit] = useState({ w: 200, h: 200 });
 
   /* live drag state — declared before the document memos that read it */
@@ -1194,6 +1263,16 @@ export default function VisualLoom() {
     link.id = "pd-archivo"; link.rel = "stylesheet";
     link.href = "https://fonts.googleapis.com/css2?family=Archivo:wght@300;400;500;600&display=swap";
     document.head.append(pre, link);
+  }, []);
+
+  /* The bar collapses in stages as it narrows: button labels drop first, then
+     the canvas controls fold into a popover. Nothing is ever clipped. */
+  useEffect(() => {
+    const el = barRef.current; if (!el) return;
+    const ro = new ResizeObserver(() => setBarW(el.clientWidth));
+    ro.observe(el);
+    setBarW(el.clientWidth);
+    return () => ro.disconnect();
   }, []);
 
   useEffect(() => {
@@ -1593,7 +1672,12 @@ export default function VisualLoom() {
     setDrift(null);
   };
 
-  const openSVG = () => { settle(); tryDownload(svgDataUrl(buildSVG(doc, expand)), `VisualLoom_${Date.now()}.svg`); setDrawer("svg"); };
+  const openSVG = (sep = expand) => {
+    settle();
+    setSvgMode(sep);
+    tryDownload(svgDataUrl(buildSVG(doc, sep)), `VisualLoom_${Date.now()}.svg`);
+    setDrawer("svg");
+  };
   const openPNG = (frac = 1) => {
     settle();
     const w = Math.round(W * frac), h = Math.round(H * frac);
@@ -1665,42 +1749,58 @@ export default function VisualLoom() {
     const ls = [...layers]; [ls[i], ls[j]] = [ls[j], ls[i]]; setLayers(ls);
   };
 
-  const drawerText = drawer === "svg" ? buildSVG(doc, expand) : drawer === "preset" ? presetJSON() : "";
+  const drawerText = drawer === "svg" ? buildSVG(doc, svgMode) : drawer === "preset" ? presetJSON() : "";
   const activeTiles = tiles.filter((t) => t.on).length;
+
+  const canvasControls = (
+    <>
+      <div className="sizechips">
+        {SIZES.map(([n, w, h]) => (
+          <button key={n} className={`chip${W === w && H === h ? " on" : ""}`} onClick={() => { setW(w); setH(h); }}>{n}</button>
+        ))}
+      </div>
+      <div className="dims">
+        <input className="num-in" type="number" value={W} min={200} max={8000}
+          onChange={(e) => setW(Math.max(200, +e.target.value || 200))} />
+        <span className="x">×</span>
+        <input className="num-in" type="number" value={H} min={200} max={8000}
+          onChange={(e) => setH(Math.max(200, +e.target.value || 200))} />
+      </div>
+      <span className="vr" />
+      <div className="grounds">
+        <span className="cap glabel">Background</span>
+        {GROUNDS.map(([g, gl]) => (
+          <button key={g} className={`sw${bg === g ? " on" : ""}`} onClick={() => setBg(g)} title={`Background: ${gl}`}>
+            <i style={g === "none"
+              ? { backgroundImage: "linear-gradient(45deg,#555 25%,transparent 25%,transparent 75%,#555 75%),linear-gradient(45deg,#555 25%,#1a1a1a 25%,#1a1a1a 75%,#555 75%)", backgroundSize: "8px 8px", backgroundPosition: "0 0,4px 4px" }
+              : { background: g }} />
+            <span>{gl}</span>
+          </button>
+        ))}
+      </div>
+    </>
+  );
 
   return (
     <div className="pd">
       <style>{CSS}</style>
 
       {/* ---- document bar ---- */}
-      <div className="top">
+      <div ref={barRef}
+        className={`top${barW < 1660 ? " compact" : ""}${barW < 620 ? " mini" : ""}`}>
         <span className="brandwrap"><Mark h={15} /><span className="brand">Visual Loom</span></span>
         <span className="ver">1.6</span>
         <span className="vr" />
-        <div style={{ display: "flex", gap: 3 }}>
-          {SIZES.map(([n, w, h]) => (
-            <button key={n} className={`chip${W === w && H === h ? " on" : ""}`} onClick={() => { setW(w); setH(h); }}>{n}</button>
-          ))}
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-          <input className="num-in" type="number" value={W} min={200} max={8000}
-            onChange={(e) => setW(Math.max(200, +e.target.value || 200))} />
-          <span style={{ color: "var(--t2)", fontSize: 10 }}>×</span>
-          <input className="num-in" type="number" value={H} min={200} max={8000}
-            onChange={(e) => setH(Math.max(200, +e.target.value || 200))} />
-        </div>
-        <span className="vr" />
-        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <span className="cap" style={{ color: "var(--t1)", whiteSpace: "nowrap" }}>Background</span>
-          {GROUNDS.map(([g, gl]) => (
-            <button key={g} className={`sw${bg === g ? " on" : ""}`} onClick={() => setBg(g)} title={`Background: ${gl}`}>
-              <i style={g === "none"
-                ? { backgroundImage: "linear-gradient(45deg,#555 25%,transparent 25%,transparent 75%,#555 75%),linear-gradient(45deg,#555 25%,#1a1a1a 25%,#1a1a1a 75%,#555 75%)", backgroundSize: "8px 8px", backgroundPosition: "0 0,4px 4px" }
-                : { background: g }} />
-              <span>{gl}</span>
-            </button>
-          ))}
-        </div>
+        {barW >= 1200 ? canvasControls : (
+          <span className="docwrap">
+            <Act onClick={() => setDocMenu(!docMenu)} icon={Ico.grid} label="Canvas" on={docMenu} />
+            {docMenu && (
+              <span className="docmenu">
+                {canvasControls}
+              </span>
+            )}
+          </span>
+        )}
         <span style={{ flex: 1 }} />
         <Act onClick={undo} icon={Ico.undo} label="Undo" dis={!canUndo} />
         <Act onClick={redo} icon={Ico.redo} label="Redo" dis={!canRedo} />
@@ -1727,14 +1827,30 @@ export default function VisualLoom() {
         </div>
         <Act onClick={() => setLayers((ls) => ls.map((l) => ({ ...l, seed: Math.floor(Math.random() * 1e5) })))} icon={Ico.dice} label="Reseed all" />
         <span className="vr" />
-        <Act onClick={openSVG} icon={Ico.code} label="SVG" />
-        <span className="pngwrap"
-          onMouseEnter={() => setPngMenu(true)} onMouseLeave={() => setPngMenu(false)}>
-          <Act onClick={() => { setPngMenu(false); openPNG(1); }} icon={Ico.image} label="PNG" />
-          {pngMenu && (
+        <span className="pngwrap" {...svgM.bind}>
+          <Act onClick={() => { svgM.setOpen(false); openSVG(expand); }} icon={Ico.code} label="SVG" />
+          {svgM.open && (
+            <span className="pngmenu wide">
+              <span className="menuhead">Repeats</span>
+              <button onClick={() => { svgM.setOpen(false); setExpand(true); openSVG(true); }}
+                className={expand ? "on" : ""}>
+                <span>Separate</span>
+                <em>easier to edit</em>
+              </button>
+              <button onClick={() => { svgM.setOpen(false); setExpand(false); openSVG(false); }}
+                className={!expand ? "on" : ""}>
+                <span>Linked</span>
+                <em>smaller file</em>
+              </button>
+            </span>
+          )}
+        </span>
+        <span className="pngwrap" {...pngM.bind}>
+          <Act onClick={() => { pngM.setOpen(false); openPNG(1); }} icon={Ico.image} label="PNG" />
+          {pngM.open && (
             <span className="pngmenu">
               {[[1, "Full"], [0.5, "Half"], [0.25, "Quarter"], [0.125, "Eighth"]].map(([f, n]) => (
-                <button key={n} onClick={() => { setPngMenu(false); openPNG(f); }}>
+                <button key={n} onClick={() => { pngM.setOpen(false); openPNG(f); }}>
                   <span>{n}</span>
                   <em>{Math.round(W * f)}×{Math.round(H * f)}</em>
                 </button>
@@ -1850,9 +1966,7 @@ export default function VisualLoom() {
               </>)}
               <div className="stack">
                 <Act onClick={bakeTile} icon={Ico.bake} label="Bake to tile" />
-                <Toggle v={expand} set={setExpand} label="Expand on export" />
               </div>
-              <p className="note">Expanded exports duplicate geometry rather than referencing it, which keeps the file simple to edit downstream.</p>
             </>)}
 
             {tab === "Looks" && (<>
@@ -1967,7 +2081,16 @@ export default function VisualLoom() {
           style={{ cursor: layers.length && !drawer && !help ? (drift ? "grabbing" : "grab") : "default" }}>
           {layers.length === 0
             ? (
-              <div className="empty-stage" />
+              <div className="empty-stage">
+                <p className="lead">
+                  Everything here is built from one ingredient: a square filled with a
+                  black-to-white gradient. It gets sliced into stripes, stacked into tiles,
+                  then stretched, rotated and layered until it stops looking like where it
+                  came from.
+                </p>
+                <p className="cta">Hit <kbd>Space</kbd> to begin</p>
+                <p className="alt">or press Random Look above</p>
+              </div>
             )
             : <Artboard model={model} w={fit.w} h={fit.h} />}
           <div className={`toast${msg ? " on" : ""}`}>{msg}</div>
@@ -2084,6 +2207,12 @@ export default function VisualLoom() {
                     <b> Reset</b> strips everything back to a single black-to-white gradient, which
                     is the block the whole tool is built from.
                   </p>
+                  <p>
+                    Hovering <b>SVG</b> offers a choice for how repeated shapes are stored.
+                    <b> Separate</b> writes each repeat as its own shape, so every one can be
+                    edited on its own. <b>Linked</b> points them all at a single original, which
+                    makes a much smaller file.
+                  </p>
 
                   <h4>Aspect ratio</h4>
                   <p>
@@ -2099,7 +2228,7 @@ export default function VisualLoom() {
           {drawer && (
             <div className="drawer">
               <div className="drawerhead">
-                <span className="title">{drawer === "png" ? `PNG export · ${pngSize[0]}×${pngSize[1]}` : drawer === "svg" ? "SVG export" : "Preset"}</span>
+                <span className="title">{drawer === "png" ? `PNG export · ${pngSize[0]}×${pngSize[1]}` : drawer === "svg" ? `SVG export · ${svgMode ? "separate" : "linked"} repeats` : "Preset"}</span>
                 {drawer !== "png" && (
                   <Act onClick={async () => flash((await copyText(drawerText)) ? "Copied" : "Clipboard blocked — select and copy")} icon={Ico.copy} label="Copy" />
                 )}
@@ -2109,7 +2238,11 @@ export default function VisualLoom() {
                 <p className="note" style={{ margin: 0 }}>
                   {drawer === "png"
                     ? "A download was attempted. If nothing saved, right-click the image and choose Save image as."
-                    : "A download was attempted. If nothing saved, copy the source below."}
+                    : drawer === "preset"
+                      ? "A download was attempted. If nothing saved, copy the text below."
+                      : svgMode
+                        ? "Every repeat is written as its own shape, so each can be edited separately. Hover the SVG button to switch to linked repeats for a much smaller file."
+                        : "Repeats are linked to a single original, keeping the file small. Hover the SVG button to switch to separate repeats if you need to edit each one."}
                 </p>
                 {drawer === "png" ? (
                   <div className="pngbox">
